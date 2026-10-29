@@ -1,0 +1,38 @@
+# 影片
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.avi
+*.mkv
+*.m4v
+# 結果與受試者資料
+summary.json
+*驗證總表*.csv
+*.csv
+*.zip
+*.html
+結果/
+S[0-9]*/
+examples/
+data/
+subjects/
+GaitLab_最終資料*/
+# 圖片
+*.png
+*.jpg
+*.jpeg
+*.heic
+*.HEIC
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.pdf
+# Python / 環境
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+Thumbs.db
