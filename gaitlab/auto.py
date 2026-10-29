@@ -1,4 +1,4 @@
-"""一鍵分析：選一個受試者資料夾，正面、側面全部自動跑完，並打包要寄給曾醫師的檔案。
+"""一鍵分析：選一個受試者資料夾，正面、側面全部自動跑完，並打包要寄給研究者的檔案。
 
 資料夾放法（擇一）：
   A. 子資料夾：S02/正面/*.mov、S02/側面/*.mov（檔名不用改）
@@ -6,7 +6,7 @@
 （另有 站立/ 子資料夾或檔名含 static、「站立」→ 靜態站立測試，平常不需要）
 
 設定（量測區大小、鏡頭高度、側面標記距離）寫在程式資料夾的「設定.txt」，第一次執行會自動產生。
-結果放在 S02/結果/；要寄的檔案自動打包成 S02/寄給曾醫師_S02.zip（不含影片，只有幾 MB）。
+結果放在 S02/結果/；要寄的檔案自動打包成 S02/寄給研究者_S02.zip（不含影片，只有幾 MB）。
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def classify(folder: str) -> tuple[list, list, list]:
 
 def pack(folder: str, out_dir: str, subject: str) -> str:
     """結果資料夾裡除了影片以外的檔案（報告、pose 檔、校正檔、csv）打包。"""
-    zpath = os.path.join(folder, f"寄給曾醫師_{subject}.zip")
+    zpath = os.path.join(folder, f"寄給研究者_{subject}.zip")
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for dp, _, files in os.walk(out_dir):
             for f in files:
@@ -200,7 +200,7 @@ def run(folder: str | None = None, open_reports: bool = True) -> dict:
     for p in problems:
         print("⚠ " + p)
     print(f"\n報告在：{out}")
-    print(f"要寄給曾醫師的檔案：{zpath}")
+    print(f"要寄給研究者的檔案：{zpath}")
     print("（不含影片；影片需要時另外傳，請勿用 LINE）")
     print("=" * 60)
     if open_reports:
