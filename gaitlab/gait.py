@@ -47,6 +47,9 @@ class Params:
     contact_level: float = 0.8       # 著地時間 = 前後距離上升到振幅 80% 的時刻
     lateral_point: str = "ankle"     # 著地點左右位置用哪個關鍵點："ankle"（預設，2026-10 小驗證較準）或 "heel"
     ankle_height_m: float = 0.09     # 腳踝關鍵點離地高度（穿鞋，含鞋底；估計值）
+    timing_point: str = "ankle"      # 著地「時間」用哪個關鍵點算雙腳前後距離："ankle"（預設）或 "heel"
+    # 2026-11 五位同仁驗證：腳跟點在深色鞋、褲管蓋住時有 20–40% 影格看不到，著地時間會晚 0.2 秒以上，
+    # 步時一長一短、整趟被判「步時不合」而丟掉；腳踝點幾乎 100% 看得到。
 
 
 BAREFOOT = {"ankle_height_m": 0.07, "landmark_height_m": 0.02}  # 赤腳：沒有鞋底，關鍵點較低（估計值）
@@ -203,33 +206,91 @@ def detect_stances(floor: dict, fs: float, prm: Params) -> tuple[list[Stance], d
 
 
 def build_sequence(stances: list[Stance], usable, fs: float, prm: Params) -> list[list[Stance]]:
-    """切出所有「左右交替、步時合理、中間沒有被排除的站立期」的連續片段（至少 3 次著地）。"""
-    # 參考步時：所有相鄰、左右交替、都可用的著地之間的時間中位數
-    dts = [(b.i_on - a.i_on) / fs for a, b in zip(stances, stances[1:])
-           if usable(a) and usable(b) and a.side != b.side]
-    med = float(np.median(dts)) if dts else np.nan
-    dls = [float(np.linalg.norm(b.heel - a.heel)) for a, b in zip(stances, stances[1:])
-           if usable(a) and usable(b) and a.side != b.side]
-    med_l = float(np.median(dls)) if dls else np.nan
+    """從所有候選著地中挑出「左右交替、步時與步長規律」的最長一串，切成連續片段（至少 3 次著地）。
+
+    舊版做法是碰到一步不合就把整串切斷，結果一個多餘的假著地（寬褲、腳被擋到時常見）會讓整趟一步都不剩。
+    現在改用動態規劃：每個著地只能接在「對側腳、步時 0.25–1.5 秒、步長 15–110 cm」的著地之後，
+    且相鄰兩步的步時、步長比例要在 step_time_lo/hi、step_len_lo/hi 之內；
+    找出能包含最多著地的那一串（同樣多時取最規律的）。沒被選上的著地就是多餘或錯誤的偵測。
+    同一腳連續兩次（中間漏掉一次著地）允許接上，但序列在此切開，不跨過缺口算步寬步長。
+    """
+    cand = [st for st in stances if usable(st)]
+    n = len(cand)
+    if n < 3:
+        return []
+    t_on = [_ton(st, fs) for st in cand]
+    pos = [st.heel for st in cand]
+    T_LO, T_HI, L_LO, L_HI = 0.20, 1.5, 0.15, 1.1       # 單步的生理範圍（含走得很慢的病人）
+    G_T, G_L = (0.6, 3.0), (0.4, 2.2)                   # 漏掉一次著地時，同側兩次著地的範圍
+
+    def link(j, i):
+        """j → i 可否相接；回傳 (kind, dt, dl)；kind: 'step'、'gap' 或 None。"""
+        dt = t_on[i] - t_on[j]
+        dl = float(np.linalg.norm(pos[i] - pos[j]))
+        if cand[i].side != cand[j].side:
+            if T_LO <= dt <= T_HI and L_LO <= dl <= L_HI:
+                return "step", dt, dl
+            return None, dt, dl
+        if G_T[0] <= dt <= G_T[1] and G_L[0] <= dl <= G_L[1]:
+            return "gap", dt, dl
+        return None, dt, dl
+
+    R_LO, R_HI = 0.45, 2.2   # 相鄰兩步的步時、步長比例容許範圍（正面拍攝的著地時間本身就有 ±0.1 秒誤差）
+
+    def regular(a, b):
+        return R_LO <= b / a <= R_HI
+
+    # 狀態 (j, i)：序列最後兩個著地為 j, i。best[(j,i)] = (著地數, −不規律度, 前一個狀態)
+    best: dict = {}
+    for i in range(n):
+        for j in range(i):
+            kind, dt, dl = link(j, i)
+            if kind is None:
+                continue
+            best[(j, i)] = (2, 0.0, None, kind)
+    for i in range(n):
+        for j in range(i):
+            if (j, i) not in best:
+                continue
+            kind_ji, dt_ji, dl_ji = link(j, i)
+            for k in range(j):
+                if (k, j) not in best:
+                    continue
+                kind_kj, dt_kj, dl_kj = link(k, j)
+                # 兩個連續單步之間要規律；碰到缺口（同側）就不比
+                if kind_ji == "step" and kind_kj == "step":
+                    if not (regular(dt_kj, dt_ji) and regular(dl_kj, dl_ji)):
+                        continue
+                    irr = abs(np.log(dt_ji / dt_kj)) + abs(np.log(dl_ji / dl_kj))
+                else:
+                    irr = 0.5   # 缺口本身算一點不規律，讓完整的串優先
+                cnt, reg, _, _ = best[(k, j)]
+                cand_val = (cnt + 1, reg - irr, (k, j), kind_ji)
+                if cand_val[:2] > best[(j, i)][:2]:
+                    best[(j, i)] = cand_val
+    if not best:
+        return []
+    end = max(best, key=lambda key: best[key][:2])
+    chain, kinds = [], []
+    key = end
+    while key is not None:
+        j, i = key
+        chain.append(i)
+        kinds.append(best[key][3])
+        prev = best[key][2]
+        if prev is None:
+            chain.append(j)
+            kinds.append("step")  # 第一個著地之前沒有連結
+            break
+        key = prev
+    chain.reverse(); kinds.reverse()
+    # kinds[m] = chain[m-1] → chain[m] 的連結種類；在 gap 處切開
     seqs, cur = [], []
-    for st in stances:
-        ok = usable(st)
-        if not ok:
-            if cur:
-                seqs.append(cur)
+    for m, idx in enumerate(chain):
+        if m > 0 and kinds[m] == "gap":
+            seqs.append(cur)
             cur = []
-            continue
-        if cur:
-            prev = cur[-1]
-            dt = (st.i_on - prev.i_on) / fs
-            plausible = np.isnan(med) or (prm.step_time_lo * med <= dt <= prm.step_time_hi * med)
-            dl = float(np.linalg.norm(st.heel - prev.heel))
-            if not np.isnan(med_l) and not (prm.step_len_lo * med_l <= dl <= prm.step_len_hi * med_l):
-                plausible = False
-            if st.side == prev.side or not plausible:
-                seqs.append(cur)
-                cur = []
-        cur.append(st)
+        cur.append(cand[idx])
     if cur:
         seqs.append(cur)
     return [q for q in seqs if len(q) >= 3]
@@ -257,7 +318,7 @@ def detect_contacts(floor: dict, fs: float, prm: Params, toe_px: dict | None = N
     """雙腳前後距離法（Zeni 2008 的改良版，適用正面拍攝）。
 
     著地時間：A 腳著地時「A 腳跟 − B 腳尖」的前後距離最大；取其上升段越過「谷底 + 80% 振幅」的時刻。
-    著地位置：前後方向用腳尖（著地後 0.10–0.35 秒），左右方向用腳跟（0.05–0.25 秒）。
+    著地位置：前後方向用腳尖（著地後 0.10–0.35 秒），左右方向用腳踝（0.05–0.15 秒）。
       正面拍攝時腳跟被腳背擋住，模型猜的腳跟前後位置有偏差且左右腳不同；腳尖則清楚可見。
     為什麼不用腳速：腳跟離地投影到地板會像在往後退，腳速會被這個假象干擾。
     站立期與雙腳支撐期在正面拍攝下無法可靠量測；i_off 只作顯示用途。
@@ -268,8 +329,9 @@ def detect_contacts(floor: dict, fs: float, prm: Params, toe_px: dict | None = N
     T = len(floor["L"]["heel"])
     u = _progression_dir(floor)
     n_ = np.array([-u[1], u[0]])
-    p = {s: {k: floor[s][k] @ u for k in ("heel", "toe")} for s in "LR"}
-    w = {k: int(round(v * fs)) for k, v in {"05": 0.05, "10": 0.10, "25": 0.25, "35": 0.35, "nan": 0.10}.items()}
+    p = {s: {k: floor[s][k] @ u for k in ("heel", "toe", "ankle") if k in floor[s]} for s in "LR"}
+    tpt = prm.timing_point if prm.timing_point in p["L"] else "heel"
+    w = {k: int(round(v * fs)) for k, v in {"05": 0.05, "10": 0.10, "15": 0.15, "25": 0.25, "35": 0.35, "nan": 0.10}.items()}
     edge = None
     if toe_px is not None and size is not None:
         edge = (prm.edge_margin_frac * size[0], prm.edge_margin_frac * size[1], size[0], size[1])
@@ -280,7 +342,7 @@ def detect_contacts(floor: dict, fs: float, prm: Params, toe_px: dict | None = N
     stances: list[Stance] = []
     dcurves = {}
     for A, B in (("L", "R"), ("R", "L")):
-        d = p[A]["heel"] - p[B]["toe"]
+        d = p[A][tpt] - p[B]["toe"]
         dcurves[A] = d
         if np.isnan(d).all():
             continue
@@ -309,14 +371,17 @@ def detect_contacts(floor: dict, fs: float, prm: Params, toe_px: dict | None = N
                 t_frac = float(a)
             k_peak, k = k, a
             win_t = slice(min(T - 1, k + w["10"]), min(T, k + w["35"]))
-            win_h = slice(min(T - 1, k + w["05"]), min(T, k + w["25"]))
+            # 左右位置：著地後 0.05–0.15 秒。腳踝點在站立期會逐漸往內側漂（身體跨過支撐腳時），
+            # 2026-10 膠帶驗證（10 cm 與 25 cm）顯示剛著地時最接近實際落腳位置。
+            win_h = slice(min(T - 1, k + w["05"]), min(T, k + w["15"] + 1))
             toe_seg, heel_seg = floor[A]["toe"][win_t], floor[A]["heel"][win_h]
             lat_seg = floor[A].get(prm.lateral_point, floor[A]["heel"])[win_h]
             toe = np.nanmedian(toe_seg, axis=0) if frac_valid(toe_seg) > 0 else np.full(2, np.nan)
             heel_mid = np.nanmedian(heel_seg, axis=0) if frac_valid(heel_seg) > 0 else np.full(2, np.nan)
             lat_mid = np.nanmedian(lat_seg, axis=0) if frac_valid(lat_seg) > 0 else np.full(2, np.nan)
-            ok_pos = (frac_valid(toe_seg) >= 0.7 and frac_valid(heel_seg) >= 0.7 and frac_valid(lat_seg) >= 0.7
-                      and k + w["35"] <= T and not np.isnan(toe).any() and not np.isnan(heel_mid).any()
+            # 位置只需要腳尖（前後）與左右用的點；腳跟看不到時只少掉足部角度，不影響步寬步長
+            ok_pos = (frac_valid(toe_seg) >= 0.7 and frac_valid(lat_seg) >= 0.7
+                      and k + w["35"] <= T and not np.isnan(toe).any()
                       and not np.isnan(lat_mid).any())
             near = slice(max(0, k - w["nan"]), min(T, k_peak + w["nan"] + 1))
             ok_gap = not np.isnan(d[near]).any()
@@ -329,7 +394,7 @@ def detect_contacts(floor: dict, fs: float, prm: Params, toe_px: dict | None = N
                     ok_edge = bool(np.all((tp[:, 0] > mx) & (tp[:, 0] < W - mx) & (tp[:, 1] > my) & (tp[:, 1] < Hh - my)))
             m = int(round(0.2 * fs))
             ok_ctx = (k - m >= 0 and k + m <= T
-                      and not np.isnan(p[A]["heel"][max(0, k - m):k + m]).any()
+                      and not np.isnan(p[A][tpt][max(0, k - m):k + m]).any()
                       and not np.isnan(p[B]["toe"][max(0, k - m):k + m]).any())
             complete = bool(ok_pos and ok_gap and ok_edge and ok_ctx)
             # 顯示用的站立範圍：腳尖停在原地（±dwell_r）的最後一格
@@ -347,14 +412,14 @@ def detect_contacts(floor: dict, fs: float, prm: Params, toe_px: dict | None = N
             stances.append(st)
     # 組合著地點：前後 = 腳尖位置 − 全體中位足長，左右 = 腳跟（或腳踝）位置；缺值 → 位置 NaN
     foot_len = [np.dot(st.toe - st.heel_mid, u) for st in stances  # type: ignore[attr-defined]
-                if st.complete]
+                if st.complete and not np.isnan(st.heel_mid).any()]  # type: ignore[attr-defined]
     Lf = float(np.median(foot_len)) if foot_len else 0.0
     for st in stances:
-        if np.isnan(st.toe).any() or np.isnan(st.heel_mid).any():  # type: ignore[attr-defined]
+        lat = st.lat_mid if not np.isnan(st.lat_mid).any() else st.heel_mid  # type: ignore[attr-defined]
+        if np.isnan(st.toe).any() or np.isnan(lat).any():
             st.heel = np.full(2, np.nan)
             st.complete = False
         else:
-            lat = st.lat_mid if not np.isnan(st.lat_mid).any() else st.heel_mid  # type: ignore[attr-defined]
             st.heel = (np.dot(st.toe, u) - Lf) * u + np.dot(lat, n_) * n_  # type: ignore[attr-defined]
     # 同一腳、同一位置的重複峰值只留第一個
     stances.sort(key=lambda z: z.i_on)
@@ -469,7 +534,7 @@ def analyze(lm: dict, H: np.ndarray, floor_w: float, floor_l: float,
         y_ok = (not np.isnan(y)) and y0 <= y <= y1
         if not y_ok:
             continue
-        why = getattr(st, "reject", "") if not st.complete else "步時或步長與前後步不合，序列在此斷開"
+        why = getattr(st, "reject", "") if not st.complete else "與主要步伐序列不連貫（多餘或錯誤的偵測）"
         dropped.append((st, why or "不完整"))
     dbg["rejected"] = sorted(({"t_s": float(t[0] + _ton(st, fs)), "side": st.side,
                                "y_m": float(st.heel[1]) if not np.isnan(st.heel).any() else None, "reason": why}
@@ -523,7 +588,7 @@ def analyze(lm: dict, H: np.ndarray, floor_w: float, floor_l: float,
             v = st.toe - st.heel_mid  # type: ignore[attr-defined]
             right = np.array([u_f[1], -u_f[0]])
             side_out = right if st.side == "R" else -right
-            if np.linalg.norm(v) > 0.03:
+            if not np.isnan(v).any() and np.linalg.norm(v) > 0.03:
                 row["foot_angle_deg"] = float(np.degrees(np.arctan2(np.dot(v, side_out), np.dot(v, u_f))))
             steps.append(row)
 
@@ -577,6 +642,17 @@ def analyze(lm: dict, H: np.ndarray, floor_w: float, floor_l: float,
         speed = dist / dur * 100 * ks if dur > 0 else np.nan
 
     valid_frames = (~np.isnan(lm["xy"][:, P.L_HEEL, 0])).mean() * 100
+    # 量測區內（兩腳踝平均前後位置在 0–floor_l）的影格中，腳踝＋腳尖 / 腳跟 可見度達標的比例
+    with np.errstate(all="ignore"):
+        ya = np.nanmean(np.stack([floor["L"]["ankle"][:, 1], floor["R"]["ankle"][:, 1]]), axis=0)
+    inz = (~np.isnan(ya)) & (ya >= 0) & (ya <= floor_l)
+    vis = lm["vis"]
+    if inz.sum() >= 10:
+        feet_ok = (vis[inz][:, [P.L_ANKLE, P.R_ANKLE, P.L_TOE, P.R_TOE]] >= prm.vis_min).all(axis=1)
+        heel_ok = (vis[inz][:, [P.L_HEEL, P.R_HEEL]] >= prm.vis_min).all(axis=1)
+        feet_pct, heel_pct = float(feet_ok.mean() * 100), float(heel_ok.mean() * 100)
+    else:
+        feet_pct = heel_pct = np.nan
 
     # 左右標記對調檢查：朝鏡頭走時受試者左髖應在畫面右側（x 較大），背對鏡頭時相反
     swap_pct = np.nan
@@ -609,6 +685,8 @@ def analyze(lm: dict, H: np.ndarray, floor_w: float, floor_l: float,
         "heel_to_hip_width_ratio": float(np.median(ratios)) if ratios else np.nan,
         "pelvic_sway_hipwidths": sway,
         "pose_detected_frames_pct": float(valid_frames),
+        "feet_visible_in_zone_pct": feet_pct,
+        "heel_visible_in_zone_pct": heel_pct,
         "lr_swap_frames_pct": swap_pct,
         "n_crossover_steps": int(sum(1 for r in steps if r.get("crossover"))),
         # 起步點檢查：量測區遠端之外沒有任何著地 → 受試者在量測區內才起步，前幾步還在加速

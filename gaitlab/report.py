@@ -168,14 +168,21 @@ def quality_flags(agg, results, meta=None) -> list[str]:
         if abs(dh) > 0.08:
             flags.append(f"地板校正與佈置不一致：從四個標記反推的鏡頭高度是 {geo['cam_height_m']:.2f} m，設定是 {float(hset):.2f} m。"
                          "請確認四張標記的左右間距、前後間距是否是標記中心到中心，以及鏡頭高度是否量對；不一致時步寬會等比例偏差。")
-    if geo and geo.get("resid_px", 0) > 1.5:
-        flags.append(f"地板校正的四個點彼此不太吻合（誤差 {geo['resid_px']:.1f} 像素，正常 < 1）：可能有一個標記點點偏了。"
+    # 2026-11 五位同仁的校正誤差多在 0.3–1.7 像素，對結果影響 < 0.2 cm；超過 3 像素才值得重點
+    if geo and geo.get("resid_px", 0) > 3.0:
+        flags.append(f"地板校正的四個點彼此不太吻合（誤差 {geo['resid_px']:.1f} 像素，正常 < 2）：可能有一個標記點點偏了。"
                      "請刪掉 calib.json 重新校正，點選時對準標記正中央。")
     if agg.get("n_step_width_values", 0) < 6:
         flags.append(f"可計算步寬的步數只有 {agg.get('n_step_width_values', 0)} 步（建議至少 6 步，請多走幾趟或加長量測區）。")
     for name, res in results:
-        if res.summary["pose_detected_frames_pct"] < 85:
-            flags.append(f"{name}：只有 {res.summary['pose_detected_frames_pct']:.0f}% 影格偵測到人體，請檢查光線、背景或遮擋。")
+        # 只看受試者在量測區內的影格；走進畫面前、走出畫面後偵測不到是正常的
+        if res.summary.get("feet_visible_in_zone_pct", 100) < 80:
+            flags.append(f"{name}：受試者在量測區內時，只有 {res.summary['feet_visible_in_zone_pct']:.0f}% 影格清楚看到腳踝與腳尖，"
+                         "請檢查光線、褲管是否蓋住腳踝、鞋子與地板顏色是否太接近。")
+        hv = res.summary.get("heel_visible_in_zone_pct")
+        if hv is not None and not (isinstance(hv, float) and math.isnan(hv)) and hv < 70:
+            flags.append(f"{name}：量測區內只有 {hv:.0f}% 影格看得到腳跟點（常見原因：褲管蓋住腳踝、深色鞋）。"
+                         "著地時間已改用腳踝點計算，不影響步寬，但足部角度可能缺少。下次請受試者把褲管捲到腳踝以上。")
         sp = res.summary.get("lr_swap_frames_pct")
         if sp is not None and not (isinstance(sp, float) and math.isnan(sp)) and sp > 5:
             flags.append(f"{name}：{sp:.0f}% 影格的左右標記疑似對調，左右腳的指標（足角、左右步）可能不可靠，請看標註影片確認。")
@@ -187,7 +194,7 @@ def quality_flags(agg, results, meta=None) -> list[str]:
         # 最靠近鏡頭的一步常因腳尖出畫面而不採用，屬正常，不提醒
         rej = [d for d in ((res.debug or {}).get("rejected") or []) if "畫面邊緣" not in d["reason"]]
         if rej:
-            items = "；".join(f"{d['t_s']:.2f} 秒{'左' if d['side'] == 'L' else '右'}腳（{d['reason']}）" for d in rej[:4])
+            items = "；".join(f"{d['t_s']:.2f} 秒{'左' if d['side'] == 'L' else '右'}腳，{d['reason']}" for d in rej[:4])
             flags.append(f"{name}：量測區內有 {len(rej)} 次著地未採用：{items}。偶爾一次不影響結果；常出現時請看影片該時間點。")
         if res.summary["n_contacts_used"] < 4:
             flags.append(f"{name}：量測區內只抓到 {res.summary['n_contacts_used']} 次著地，結果不可靠。")

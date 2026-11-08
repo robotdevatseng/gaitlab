@@ -230,7 +230,7 @@ def run_analyze(args):
                   f"鏡頭到量測區近端 {geo['near_dist_m']:.2f} m")
             if abs(geo["cam_height_m"] - args.cam_height) > 0.08:
                 print("  ⚠ 差距超過 8 cm：請確認標記間距是否為中心到中心、鏡頭高度是否量對。")
-            if geo.get("resid_px", 0) > 1.5:
+            if geo.get("resid_px", 0) > 3.0:
                 print(f"  ⚠ 四個標記點彼此不太吻合（{geo['resid_px']:.1f} 像素）：可能有一點點偏了，建議刪掉 calib.json 重新校正。")
     except Exception as e:  # 檢查失敗不影響分析
         print("校正檢查略過：", e)
