@@ -150,35 +150,131 @@ def write_steps_csv(path, results):
         w.writerows(rows)
 
 
+def _isnull(v):
+    return v is None or (isinstance(v, float) and math.isnan(v))
+
+
+def clean_nan(d):
+    """算不出來的值一律存成 null（不填 0）。"""
+    if isinstance(d, dict):
+        return {k: clean_nan(v) for k, v in d.items()}
+    if isinstance(d, (list, tuple)):
+        return [clean_nan(v) for v in d]
+    if isinstance(d, (np.floating, float)):
+        return None if math.isnan(float(d)) else float(d)
+    if isinstance(d, np.integer):
+        return int(d)
+    if isinstance(d, np.bool_):
+        return bool(d)
+    return d
+
+
+def front_null_reasons(s: dict) -> dict:
+    """正面摘要中每個 null 的原因。"""
+    n = s.get("n_contacts_used") or 0
+    why = {}
+    fixed = {
+        "double_support_pct": "正面拍攝無法可靠量測，不提供；請看側面分析",
+        "stance_pct": "正面拍攝無法可靠量測，不提供；請看側面分析",
+        "stance_speed_threshold_m_s": "只有舊的腳速法才有這個值",
+    }
+    need = {"step_width_mean_cm": 3, "step_width_sd_cm": 4, "step_width_cv_pct": 4, "step_length_mean_cm": 2,
+            "step_length_cv_pct": 3, "step_time_mean_s": 2, "step_time_cv_pct": 3, "cadence_steps_min": 2,
+            "gait_speed_cm_s": 2, "stride_length_mean_cm": 3, "stride_time_cv_pct": 4}
+    for k, v in s.items():
+        if not _isnull(v):
+            continue
+        if k in fixed:
+            why[k] = fixed[k]
+        elif k in need:
+            why[k] = (f"連續可用的著地只有 {n} 次，這個指標至少需要連續 {need[k]} 次"
+                      if s.get("n_trials") is None else f"各趟合計可用著地 {n} 次，不足以計算（至少需要連續 {need[k]} 次）")
+        elif k.startswith("foot_angle"):
+            why[k] = "腳跟點看不到，或正面拍攝下足部角度量不到"
+        elif k in ("feet_visible_in_zone_pct", "heel_visible_in_zone_pct"):
+            why[k] = "受試者在量測區內的影格不到 10 格"
+        elif k in ("lr_swap_frames_pct", "pelvic_sway_hipwidths", "heel_to_hip_width_ratio"):
+            why[k] = "沒有可用的步伐序列"
+        else:
+            why[k] = "資料不足，無法計算"
+    return why
+
+
+def side_null_reasons(s: dict) -> dict:
+    """側面摘要中每個 null 的原因。"""
+    why = {}
+    ns, nst = s.get("n_strides") or 0, s.get("n_steps") or 0
+    nx = s.get("n_strides_excluded_irregular") or 0
+    if nx and not ns:
+        return {k: f"偵測到的 {nx} 個步態週期都不合理（週期時間或站立期比例異常，多半是事件偵測錯誤），全部不採用"
+                for k, v in s.items() if _isnull(v)}
+    for k, v in s.items():
+        if not _isnull(v):
+            continue
+        if k == "double_support_pct":
+            why[k] = ("沒有一個步態週期同時具備完整的兩腳事件（對側腳的著地或離地落在量測範圍外或偵測不到）"
+                      if ns else "沒有偵測到完整的步態週期")
+        elif k in ("stance_pct", "swing_pct", "stance_time_s", "swing_time_s", "stride_time_s"):
+            why[k] = "沒有偵測到完整的步態週期（同一腳連續兩次著地都在量測範圍內）"
+        elif k == "stride_time_cv_pct":
+            why[k] = f"完整步態週期只有 {ns} 個，變異至少需要 2 個"
+        elif k in ("cadence_steps_min", "step_length_cm"):
+            why[k] = "沒有左右交替且都在量測範圍內的相鄰著地"
+        elif k == "step_time_cv_pct":
+            why[k] = f"可用的步只有 {nst} 步，變異至少需要 2 步"
+        elif k == "walking_speed_cm_s":
+            why[k] = "量測範圍內的著地不到 3 次"
+        elif k.startswith("knee_peak_swing"):
+            why[k] = "這一側沒有完整的擺盪期，或這一側是遠側腳（被近側腳擋住，不採用）"
+        else:
+            why[k] = "資料不足，無法計算"
+    return why
+
+
+def write_blocked_html(path, meta, title):
+    items = "".join(f"<li><b>{html.escape(k)}</b>：{html.escape(str(v))}</li>" for k, v in (meta.get("not_analyzed") or {}).items())
+    doc = f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>{title}：無法分析</title>
+<style>body{{font-family:"Noto Sans TC","Microsoft JhengHei","PingFang TC",sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222}}
+.flags{{background:#fdecea;border-left:4px solid #c0392b;padding:10px 14px;margin:12px 0;line-height:1.7}}</style></head><body>
+<h1>{title}：沒有產生結果</h1>
+<div>受試者：{html.escape(meta.get('subject') or '—')}　|　{meta.get('created','')}</div>
+<div class="flags"><b>所有影片都沒有分析，原因如下（沒有任何數值被計算或填補）：</b><ul>{items}</ul></div>
+</body></html>"""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(doc)
+
+
 def write_summary_json(path, meta, agg, results):
-    def clean(d):
-        return {k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in d.items()}
-    out = {"meta": meta, "overall": clean(agg),
-           "trials": {name: clean(res.summary) for name, res in results}}
+    clean = clean_nan
+    out = {"meta": clean(meta), "overall": clean(agg), "overall_null_reasons": front_null_reasons(agg) if results else
+           {k: "沒有可分析的影片（原因見 meta.not_analyzed）" for k, v in agg.items() if v is None},
+           "trials": {name: {**clean(res.summary), "null_reasons": front_null_reasons(res.summary)} for name, res in results}}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
 
 
 def quality_flags(agg, results, meta=None) -> list[str]:
     flags = []
-    geo = (meta or {}).get("calib_check") or {}
     hset = (meta or {}).get("cam_height_m")
-    if geo and hset:
-        dh = geo["cam_height_m"] - float(hset)
-        if abs(dh) > 0.08:
-            flags.append(f"地板校正與佈置不一致：從四個標記反推的鏡頭高度是 {geo['cam_height_m']:.2f} m，設定是 {float(hset):.2f} m。"
+    for k, v in ((meta or {}).get("not_analyzed") or {}).items():
+        flags.append(f"{k}：沒有分析。{v}")
+    per = (meta or {}).get("calibration_per_video") or {}
+    geos = [(n, (c or {}).get("check") or {}) for n, c in per.items()] or [("", (meta or {}).get("calib_check") or {})]
+    for n, geo in geos:
+        tag = f"{n}：" if n else ""
+        if geo and hset and abs(geo["cam_height_m"] - float(hset)) > 0.08:
+            flags.append(f"{tag}地板校正與佈置不一致：從四個標記反推的鏡頭高度是 {geo['cam_height_m']:.2f} m，設定是 {float(hset):.2f} m。"
                          "請確認四張標記的左右間距、前後間距是否是標記中心到中心，以及鏡頭高度是否量對；不一致時步寬會等比例偏差。")
-    # 2026-11 五位同仁的校正誤差多在 0.3–1.7 像素，對結果影響 < 0.2 cm；超過 3 像素才值得重點
-    if geo and geo.get("resid_px", 0) > 3.0:
-        flags.append(f"地板校正的四個點彼此不太吻合（誤差 {geo['resid_px']:.1f} 像素，正常 < 2）：可能有一個標記點點偏了。"
-                     "請刪掉 calib.json 重新校正，點選時對準標記正中央。")
+        # 2026-11 五位同仁的校正誤差多在 0.3–1.7 像素，對結果影響 < 0.2 cm；超過 3 像素才值得重點
+        if geo and geo.get("resid_px", 0) > 3.0:
+            flags.append(f"{tag}地板校正的四個點彼此不太吻合（誤差 {geo['resid_px']:.1f} 像素，正常 < 2）：可能有一個標記點點偏了。"
+                         f"請刪掉 {n + '_' if n else ''}calib.json 重新校正，點選時對準標記正中央。")
+    for n, c in per.items():
+        if "舊版共用校正檔" in ((c or {}).get("method") or ""):
+            flags.append(f"{n}：使用舊版共用校正檔（沒有原始影片可重新校正），無法確認校正與這支影片相符。")
     if agg.get("n_step_width_values", 0) < 6:
         flags.append(f"可計算步寬的步數只有 {agg.get('n_step_width_values', 0)} 步（建議至少 6 步，請多走幾趟或加長量測區）。")
     for name, res in results:
-        vs = res.summary.get("video_size_px")
-        if vs and min(vs) not in (720, 1080, 1440, 2160):
-            flags.append(f"{name}：影片解析度是 {vs[0]}×{vs[1]}，不是相機原始規格（例如 2160×3840），"
-                         "表示傳檔或剪輯時被重新編碼、裁切過，畫質會下降。請用 AirDrop 或接線傳「原始檔」，不要經過 LINE、iMessage 或剪輯 App。")
         # 只看受試者在量測區內的影格；走進畫面前、走出畫面後偵測不到是正常的
         if res.summary.get("feet_visible_in_zone_pct", 100) < 80:
             flags.append(f"{name}：受試者在量測區內時，只有 {res.summary['feet_visible_in_zone_pct']:.0f}% 影格清楚看到腳踝與腳尖，"
@@ -384,12 +480,22 @@ def write_side_html(path, meta, agg, results):
         per = "".join(f"<td>{_fmt(r.summary.get(key), nd)}</td>" for _, r in results) if len(results) > 1 else ""
         rows += (f"<tr><td class='lab'>{label}</td><td class='big'>{_fmt(agg.get(key), nd)}</td>"
                  f"<td class='unit'>{unit}</td>{per}<td class='note'>{html.escape(note)}</td></tr>")
-    flags = []
+    flags = [f"{k}：沒有分析。{v}" for k, v in (meta.get("not_analyzed") or {}).items()]
+    lr_rows = ""
+    for n, r in results:
+        lr = r.summary.get("lr") or {}
+        lr_rows += (f"<tr><td class='lab'>{html.escape(n)}</td><td>{lr.get('walking_direction_image','—')}</td>"
+                    f"<td>{r.summary.get('direction','—')}</td><td>{ {'L':'左腳','R':'右腳'}.get(lr.get('near_side_expected'),'—')}</td>"
+                    f"<td>{html.escape(str(lr.get('mirrored_check','—')))}</td>"
+                    f"<td>{lr.get('frames_swapped_locally','—')}</td><td>{lr.get('frames_discarded','—')}</td>"
+                    f"<td>{'是' if lr.get('whole_trial_flipped') else '否'}</td><td>{lr.get('frames_relabelled','—')} / {lr.get('frames_total','—')}</td></tr>")
+        if lr and not lr.get("near_side_confident", True):
+            flags.append(f"{n}：兩腳在畫面上的高度差太小，無法由畫面確認哪一腳靠近鏡頭；左右腳沿用模型標記，左右分開的指標請保留。")
+        if lr.get("frames_total") and (lr.get("frames_discarded") or 0) > 0.1 * lr["frames_total"]:
+            flags.append(f"{n}：有 {lr['frames_discarded']} 格腿部關鍵點亂跳而作廢（多發生在兩腿交會時），事件時間可能受影響。")
     for n, r in results:
         if r.summary["n_strides"] < 2:
             flags.append(f"{n}：只抓到 {r.summary['n_strides']} 個完整步態週期，請確認受試者有走過兩張標記之間、鏡頭沒有被擋住。")
-        if r.summary["lr_swaps_fixed_frames"] > 0.1 * len(r.t):
-            flags.append(f"{n}：有 {r.summary['lr_swaps_fixed_frames']} 格左右腳標記對調被自動修正，請看品質檢查圖確認。")
     flag_html = ("<div class='flags'><b>品質提醒</b><ul>" + "".join(f"<li>{html.escape(f)}</li>" for f in flags) + "</ul></div>") if flags else \
         "<div class='ok'>品質檢查通過。</div>"
     imgs = "".join(f"<img src='data:image/png;base64,{fig_side(n, r)}'>" for n, r in results)
@@ -407,10 +513,15 @@ td.note{{text-align:left;color:#666;font-size:12px}} img{{max-width:100%;display
 .disc{{color:#888;font-size:12px;margin-top:32px}}
 </style></head><body>
 <h1>側面步態報告（研究原型）</h1>
-<div class="meta">受試者：{html.escape(meta.get('subject','—'))}　|　分析時間：{meta['created']}　|　趟數：{len(results)}　|　側面標記間距：{meta.get('gap_m')} m</div>
+<div class="meta">受試者：{html.escape(meta.get('subject','—'))}　|　分析時間：{meta['created']}　|　趟數：{len(results)}　|　側面標記間距（實際使用值）：{meta.get('gap_m')} m</div>
+<div class="meta" style="margin-top:4px">{html.escape(meta.get('gap_note',''))}</div>
 {flag_html}
 <h2>主要指標</h2>
 <table><tr><th style="text-align:left">指標</th><th>合併</th><th></th>{head}<th style="text-align:left">說明</th></tr>{rows}</table>
+<h2>左右腳判定（一律為受試者自己的左、右）</h2>
+<table><tr><th style="text-align:left">趟</th><th>行走方向（畫面）</th><th>行走方向（標記）</th><th>靠鏡頭的腳</th><th>鏡像檢查</th>
+<th>單格對調修正</th><th>作廢格數</th><th>整趟對調</th><th>修正後與模型原標記不同的格數 / 總格數</th></tr>{lr_rows}</table>
+<div class="meta">規則：畫面未鏡像時，往畫面右方走 → 靠鏡頭的是右腳；往左走 → 左腳。靠鏡頭的腳站立時在畫面上位置較低，用來檢查模型的標記；不符就整趟對調。</div>
 <h2>品質檢查</h2>{imgs}
 <div class="disc">研究用原型，側面分析目前只經過合成資料驗證，尚未與步道或動作擷取系統比對，不可作為臨床診斷依據。所有運算在本機完成。</div>
 </body></html>"""

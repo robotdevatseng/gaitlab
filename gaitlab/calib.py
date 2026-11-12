@@ -190,10 +190,13 @@ def click_points(frame: np.ndarray, known: dict | None = None,
     return np.float32([pts[k] for k in range(n_pts)])
 
 
-def save_calib(path: str, img_pts, width_m: float, length_m: float, method: str) -> dict:
+def save_calib(path: str, img_pts, width_m: float, length_m: float, method: str,
+               image_size=None, video: str | None = None) -> dict:
     H = homography(img_pts, width_m, length_m)
     calib = {
         "method": method,
+        "image_size_px": [int(v) for v in image_size] if image_size is not None else None,
+        "video": video,
         "image_points_px": np.asarray(img_pts).tolist(),
         "floor_width_m": width_m,
         "floor_length_m": length_m,

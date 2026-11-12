@@ -145,3 +145,25 @@ def load_landmarks(path: str) -> dict:
     d = np.load(path)
     return {"xy": d["xy"], "vis": d["vis"], "t": d["t"],
             "fps": float(d["fps"]), "size": tuple(int(v) for v in d["size"])}
+
+
+NATIVE_SIZES = {(720, 1280), (1080, 1920), (2160, 3840)}
+
+
+def is_native_size(size) -> bool:
+    """影片解析度是否為相機原始規格（720p／1080p／4K，直拍或橫拍）。
+    在相簿調色、套濾鏡、裁切或經通訊軟體傳送後，解析度常變成 2116×3762 這類數字，
+    畫面被裁切過，地板校正與尺度都不能信任。"""
+    try:
+        a, b = sorted(int(v) for v in size)
+    except Exception:
+        return False
+    return (a, b) in NATIVE_SIZES
+
+
+def size_problem(size) -> str | None:
+    if is_native_size(size):
+        return None
+    return (f"影片解析度 {int(size[0])}×{int(size[1])} 不是相機原始規格（720p／1080p／4K），"
+            "表示影片被編輯（調色、濾鏡、裁切）或轉檔過，畫面位置已改變，無法可靠校正。"
+            "請在 iPhone 相簿對該影片按「編輯 → 回復 → 回復原狀」，再用 AirDrop 或接線傳原始檔。")

@@ -24,7 +24,7 @@ DEFAULTS = [
     ("量測區寬度", 1.0, "地板四張標記（0–3 號）左右中心距離，公尺"),
     ("量測區長度", 5.0, "地板四張標記前後中心距離，公尺"),
     ("正面鏡頭高度", 1.2, "正面 iPad 鏡頭離地高度，公尺"),
-    ("側面標記距離", 2.0, "側面兩張標記（4、5 號）中心距離，公尺"),
+    ("側面標記距離", 2.04, "側面兩張標記（4、5 號）中心距離，公尺（本院佈置實測 2.04；只影響側面的步長與步速）"),
     ("赤腳", "否", "受試者是否赤腳（是／否）。病人一律穿鞋；只有同仁驗證的赤腳組才改成「是」，或把資料夾名稱加上「赤腳」"),
 ]
 YES, NO = ("是", "yes", "y", "true", "1", "赤腳"), ("否", "no", "n", "false", "0", "穿鞋")
@@ -97,10 +97,16 @@ def classify(folder: str) -> tuple[list, list, list]:
 def pack(folder: str, out_dir: str, subject: str) -> str:
     """結果資料夾裡除了影片以外的檔案（報告、pose 檔、校正檔、csv）打包。"""
     zpath = os.path.join(folder, f"寄給研究者_{subject}.zip")
+    if os.path.exists(zpath):                      # 不覆寫上一次打包的檔案
+        import time
+        stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(os.path.getmtime(zpath)))
+        os.replace(zpath, os.path.join(folder, f"寄給研究者_{subject}_舊_{stamp}.zip"))
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for dp, _, files in os.walk(out_dir):
             for f in files:
                 if f.lower().endswith((".mp4", ".mov", ".m4v", ".avi")) or f.startswith("."):
+                    continue
+                if "舊輸出" in os.path.relpath(dp, out_dir).split(os.sep):   # 舊輸出留在電腦上，不重複寄
                     continue
                 full = os.path.join(dp, f)
                 z.write(full, os.path.join(subject, os.path.relpath(full, out_dir)))
@@ -133,34 +139,39 @@ def run(folder: str | None = None, open_reports: bool = True) -> dict:
     floor = (st["量測區寬度"], st["量測區長度"])
     calib_path = os.path.join(out, "正面", "calib.json")
 
-    if front or static:
-        try:
-            os.makedirs(os.path.dirname(calib_path), exist_ok=True)
-            if os.path.exists(calib_path):
-                print(f"\n使用上次的地板校正：{calib_path}（要重新校正就刪掉這個檔案）")
-            else:
-                print("\n【1】地板校正")
-                CLI.do_calibrate((front or static)[0], floor, "auto", None, calib_path)
-        except SystemExit as e:
-            problems.append(f"地板校正沒有完成：{e}")
-        except Exception as e:  # pragma: no cover
-            problems.append(f"地板校正失敗：{e}")
-
-    if front and os.path.exists(calib_path):
-        print("\n【2】正面分析（每段約 1–2 分鐘）")
+    if abs(float(st["側面標記距離"]) - 2.0) < 1e-9:
+        problems.append("設定.txt 的「側面標記距離」是 2.0 m；本院佈置實測為 2.04 m。若現場沒有重貼標記，請改成 2.04"
+                        "（只影響側面的步長與步速，各約少算 2%）。")
+    if front:
+        print("\n【1】正面分析（每支影片各自校正；每段約 1–2 分鐘）")
         try:
             agg, geo = CLI.run_analyze(SimpleNamespace(
-                videos=front, floor=floor, calib=calib_path, method="auto", points=None, subject=subject,
+                videos=front, floor=floor, calib=calib_path if os.path.exists(calib_path) else None, method="auto",
+                points=None, subject=subject,
                 out=os.path.join(out, "正面"), cam_height=st["正面鏡頭高度"], model=1, overlay=False,
                 reuse=True, lateral="ankle", barefoot=barefoot))
-            done["front"] = agg
             reports.append(os.path.join(out, "正面", "report.html"))
+            if agg.get("n_trials"):
+                done["front"] = agg
+            else:
+                problems.append("正面影片全部沒有分析（原因見報告）；沒有產生任何數值")
             if geo and abs(geo["cam_height_m"] - st["正面鏡頭高度"]) > 0.08:
                 problems.append(f"地板校正反推鏡頭高度 {geo['cam_height_m']:.2f} m，跟設定 {st['正面鏡頭高度']} m 不一致："
                                 "請確認標記間距（中心到中心）與鏡頭高度")
+        except SystemExit as e:
+            problems.append(f"正面分析沒有完成：{e}")
         except Exception as e:
             traceback.print_exc()
             problems.append(f"正面分析失敗：{e}")
+
+    if static:
+        try:
+            calib_path = os.path.join(out, "站立", "calib.json")
+            os.makedirs(os.path.dirname(calib_path), exist_ok=True)
+            if not os.path.exists(calib_path):
+                CLI.do_calibrate(static[0], floor, "auto", None, calib_path)
+        except SystemExit as e:
+            problems.append(f"站立測試的地板校正沒有完成：{e}")
 
     if side:
         print("\n【3】側面分析")
