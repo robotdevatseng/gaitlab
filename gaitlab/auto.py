@@ -38,8 +38,14 @@ def load_settings() -> dict:
                 f.write(f"# {note}\n{k} = {v}\n")
         print(f"已建立設定檔：{SETTINGS_FILE}（請確認數字跟現場佈置一樣）")
     vals = {k: v for k, v, _ in DEFAULTS}
-    with open(SETTINGS_FILE, encoding="utf-8-sig") as f:
-        for line in f:
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8-sig") as f:
+            lines = f.read().splitlines()
+    except UnicodeDecodeError:      # Windows 記事本存成 ANSI（Big5）時
+        with open(SETTINGS_FILE, encoding="cp950", errors="replace") as f:
+            lines = f.read().splitlines()
+    if True:
+        for line in lines:
             line = line.split("#", 1)[0].strip()
             if "=" not in line:
                 continue
@@ -217,5 +223,6 @@ def run(folder: str | None = None, open_reports: bool = True) -> dict:
     if open_reports:
         for r in reports:
             if os.path.exists(r):
-                webbrowser.open("file://" + os.path.abspath(r))
+                from pathlib import Path
+                webbrowser.open(Path(os.path.abspath(r)).as_uri())   # Windows 路徑也能正確轉成 file:///C:/…
     return {"zip": zpath, "problems": problems, "done": list(done)}

@@ -19,9 +19,50 @@ L_TOE, R_TOE = 31, 32
 N_LANDMARKS = 33
 
 
+_ASCII_COPIES: dict = {}
+
+
+def _windows_fallback_paths(path: str):
+    """Windows 上 OpenCV 有時打不開含中文的路徑（例如 S02\\正面\\IMG_1511.MOV）。
+    依序嘗試：8.3 短路徑 → 複製一份到暫存資料夾（純英數檔名）。只在直接開啟失敗時才會用到。"""
+    import os
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.windll.kernel32.GetShortPathNameW(os.path.abspath(path), buf, 1024)
+        if 0 < n < 1024 and buf.value.isascii():
+            yield buf.value
+    except Exception:
+        pass
+    try:
+        import hashlib
+        import shutil
+        import tempfile
+        key = os.path.abspath(path)
+        if key not in _ASCII_COPIES:
+            ext = os.path.splitext(path)[1]
+            ext = ext if ext.isascii() else ".mov"
+            dst = os.path.join(tempfile.gettempdir(), "gaitlab_" + hashlib.md5(key.encode("utf-8")).hexdigest()[:12] + ext)
+            if dst.isascii():
+                if not (os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(path)):
+                    print("  （Windows：路徑含中文，先複製一份到暫存資料夾再讀取）")
+                    shutil.copyfile(path, dst)
+                _ASCII_COPIES[key] = dst
+        if key in _ASCII_COPIES:
+            yield _ASCII_COPIES[key]
+    except Exception:
+        pass
+
+
 def open_video(path: str) -> cv2.VideoCapture:
     """開啟影片，並要求依手機的旋轉標記自動轉正（iPad 直拍的影片常帶 90° 標記）。"""
+    import os
     cap = cv2.VideoCapture(path)
+    if not cap.isOpened() and os.name == "nt" and os.path.exists(path) and not path.isascii():
+        for alt in _windows_fallback_paths(path):
+            cap = cv2.VideoCapture(alt)
+            if cap.isOpened():
+                break
     if not cap.isOpened():
         raise FileNotFoundError(f"無法開啟影片：{path}（檔名、路徑是否正確？iPad 格式是否設為「最相容」？）")
     if hasattr(cv2, "CAP_PROP_ORIENTATION_AUTO"):

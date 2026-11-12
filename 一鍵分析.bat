@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul
+set PYTHONUTF8=1
 cd /d "%~dp0"
 set PY=
 if exist .venv\Scripts\python.exe set PY=.venv\Scripts\python.exe
