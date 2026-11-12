@@ -175,6 +175,10 @@ def quality_flags(agg, results, meta=None) -> list[str]:
     if agg.get("n_step_width_values", 0) < 6:
         flags.append(f"可計算步寬的步數只有 {agg.get('n_step_width_values', 0)} 步（建議至少 6 步，請多走幾趟或加長量測區）。")
     for name, res in results:
+        vs = res.summary.get("video_size_px")
+        if vs and min(vs) not in (720, 1080, 1440, 2160):
+            flags.append(f"{name}：影片解析度是 {vs[0]}×{vs[1]}，不是相機原始規格（例如 2160×3840），"
+                         "表示傳檔或剪輯時被重新編碼、裁切過，畫質會下降。請用 AirDrop 或接線傳「原始檔」，不要經過 LINE、iMessage 或剪輯 App。")
         # 只看受試者在量測區內的影格；走進畫面前、走出畫面後偵測不到是正常的
         if res.summary.get("feet_visible_in_zone_pct", 100) < 80:
             flags.append(f"{name}：受試者在量測區內時，只有 {res.summary['feet_visible_in_zone_pct']:.0f}% 影格清楚看到腳踝與腳尖，"

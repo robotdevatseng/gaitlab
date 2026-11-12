@@ -209,8 +209,8 @@ def build_sequence(stances: list[Stance], usable, fs: float, prm: Params) -> lis
     """從所有候選著地中挑出「左右交替、步時與步長規律」的最長一串，切成連續片段（至少 3 次著地）。
 
     舊版做法是碰到一步不合就把整串切斷，結果一個多餘的假著地（寬褲、腳被擋到時常見）會讓整趟一步都不剩。
-    現在改用動態規劃：每個著地只能接在「對側腳、步時 0.25–1.5 秒、步長 15–110 cm」的著地之後，
-    且相鄰兩步的步時、步長比例要在 step_time_lo/hi、step_len_lo/hi 之內；
+    現在改用動態規劃：每個著地只能接在「對側腳、步時 0.2–1.5 秒、步長 15–110 cm」的著地之後，
+    且相鄰兩步的步時、步長比例要在 0.45–2.2 倍之內；
     找出能包含最多著地的那一串（同樣多時取最規律的）。沒被選上的著地就是多餘或錯誤的偵測。
     同一腳連續兩次（中間漏掉一次著地）允許接上，但序列在此切開，不跨過缺口算步寬步長。
     """
@@ -297,6 +297,8 @@ def build_sequence(stances: list[Stance], usable, fs: float, prm: Params) -> lis
 
 
 def _progression_dir(floor: dict) -> np.ndarray:
+    key = "ankle" if "ankle" in floor["L"] else "heel"   # 腳跟常看不到，優先用腳踝
+    floor = {s: {"heel": floor[s][key]} for s in "LR"}
     P_ = np.concatenate([floor["L"]["heel"], floor["R"]["heel"]])
     P_ = P_[~np.isnan(P_).any(axis=1)]
     if len(P_) < 10:
@@ -643,7 +645,9 @@ def analyze(lm: dict, H: np.ndarray, floor_w: float, floor_l: float,
 
     valid_frames = (~np.isnan(lm["xy"][:, P.L_HEEL, 0])).mean() * 100
     # 量測區內（兩腳踝平均前後位置在 0–floor_l）的影格中，腳踝＋腳尖 / 腳跟 可見度達標的比例
-    with np.errstate(all="ignore"):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # 兩腳都缺值的影格 → NaN，屬正常
         ya = np.nanmean(np.stack([floor["L"]["ankle"][:, 1], floor["R"]["ankle"][:, 1]]), axis=0)
     inz = (~np.isnan(ya)) & (ya >= 0) & (ya <= floor_l)
     vis = lm["vis"]
@@ -685,6 +689,7 @@ def analyze(lm: dict, H: np.ndarray, floor_w: float, floor_l: float,
         "heel_to_hip_width_ratio": float(np.median(ratios)) if ratios else np.nan,
         "pelvic_sway_hipwidths": sway,
         "pose_detected_frames_pct": float(valid_frames),
+        "video_size_px": [int(v) for v in lm["size"]] if lm.get("size") is not None else None,
         "feet_visible_in_zone_pct": feet_pct,
         "heel_visible_in_zone_pct": heel_pct,
         "lr_swap_frames_pct": swap_pct,

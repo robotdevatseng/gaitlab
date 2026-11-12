@@ -13,7 +13,7 @@
 3. 雙擊「一鍵分析.command」→ 選 `S02` 資料夾 → 等它跑完。若跳出視窗要你點標記，依序點畫面上提示的標記，按 Enter。
 4. 報告會自動打開；把 `S02/寄給研究者_S02.zip` 寄給研究者（不含影片，只有幾 MB）。
 
-**更新程式**：程式放在 GitHub（robotdevatseng/gaitlab）。第一次請用 GitHub Desktop「Clone」下來，之後有新版時雙擊「更新程式.command」（Windows：更新程式.bat）就會抓最新版，受試者資料夾不受影響。更新後不必重跑舊資料，除非研究者要求；要重跑時姿態檔已有快取，一位受試者只要幾十秒。
+**更新程式**：程式放在 GitHub（robotdevatseng/gaitlab）。最簡單：到 https://github.com/robotdevatseng/gaitlab 按綠色的 Code → Download ZIP，解壓縮後取代舊的 gaitlab 資料夾（受試者資料夾請放在 gaitlab 外面）。若用 GitHub Desktop「Clone」下來，之後有新版時雙擊「更新程式.command」（Windows：更新程式.bat）就會自動抓最新版。更新後不必重跑舊資料，除非研究者要求；要重跑時姿態檔已有快取，一位受試者只要幾十秒。
 
 現場尺寸寫在「設定.txt」（量測區 1.0 × 5.0 m、鏡頭高 1.2 m、側面標記距離 2.0 m）；佈置不同時才需要改。病人一律穿自己的平底包鞋；只有同仁驗證的赤腳組，把資料夾名稱加上「赤腳」（例如 `S04_赤腳`），程式會改用赤腳的高度修正。下面是完整說明與命令列用法。
 
