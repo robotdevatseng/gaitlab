@@ -167,6 +167,8 @@ def run_side(args):
     meta = {"subject": args.subject, "created": R.now_str(), "gap_m": args.gap,
             "gap_note": "側面標記間距只影響側面的「距離」指標（步長、步速），兩者與間距成正比；"
                         "不影響時間與比例指標（站立期、擺盪期、雙腳支撐期、步頻、步時、週期時間）與膝角度；也不影響正面分析的任何指標。",
+            "validation_status": {"double_support_pct": "未驗證（尚未與參考標準比對；同一人各趟仍差 4–7 個百分點）",
+                                  "stance_pct": "僅合成資料驗證；待與參考標準比對"},
             "not_analyzed": skipped}
     clean = R.clean_nan
     if not results:
@@ -385,6 +387,8 @@ def run_analyze(args):
             "floor_m": [w, l], "cam_height_m": args.cam_height,
             "calibration": "每支影片各自校正", "calibration_per_video": calibs,
             "calib_check": geo0, "lateral_point": args.lateral, "footwear": "赤腳" if barefoot else "穿鞋",
+            "validation_status": {"step_width": "未驗證（尚未與壓力步道或其他參考標準比對；僅膠帶小驗證）",
+                                  "speed_cadence_stride": "膠帶小驗證：步長 60 → 59.3–60.2 cm、步幅 120 → 118.1–119.3 cm"},
             "not_analyzed": skipped}
     if not results:
         agg = {k: None for k in ("n_step_width_values", "gait_speed_cm_s", "cadence_steps_min", "step_width_mean_cm",

@@ -27,9 +27,9 @@ C_L, C_R = "#2a6fdb", "#e8743b"   # 左腳藍、右腳橘
 
 METRICS = [
     # key, 中文, 單位, 小數位, 說明
-    ("step_width_mean_cm", "步寬（平均）", "cm", 1, "對側兩次著地點連線到這一步的垂直距離（GAITRite 定義）"),
-    ("step_width_sd_cm", "步寬變異（SD）", "cm", 1, "每一步步寬的標準差；本體感覺喪失時上升"),
-    ("step_width_cv_pct", "步寬變異（CV）", "%", 1, ""),
+    ("step_width_mean_cm", "步寬（平均）［未驗證］", "cm", 1, "對側兩次著地點連線到這一步的垂直距離（GAITRite 定義）。未與參考標準比對；膠帶小驗證：10 cm → 10.9、實際 23.7 cm → 22.0"),
+    ("step_width_sd_cm", "步寬變異（SD）［未驗證］", "cm", 1, "每一步步寬的標準差；本體感覺喪失時上升"),
+    ("step_width_cv_pct", "步寬變異（CV）［未驗證］", "%", 1, ""),
     ("gait_speed_cm_s", "步速", "cm/s", 1, "Makino 2023：DCM 嚴重度分界約 100 cm/s"),
     ("cadence_steps_min", "步頻", "步/分", 1, ""),
     ("stride_length_mean_cm", "步幅（平均）", "cm", 1, "同一腳兩次著地的距離；正面拍攝最可靠的長度指標"),
@@ -357,7 +357,7 @@ td.note{{text-align:left;color:#666;font-size:12px}} img{{max-width:100%;display
 <h2>逐步資料</h2>
 <table><tr><th>趟</th><th>#</th><th>腳</th><th>著地時間 s</th><th>步寬 cm</th><th>步長 cm</th><th>步時 s</th><th>步幅 cm</th></tr>{step_rows}</table>
 <div class="disc">本報告由研究用原型程式產生，尚未經過與參考標準（壓力步道或標記式動作分析）的驗證，數值僅供研究使用，不可作為臨床診斷依據。
-所有運算在本機完成，未上傳任何資料。</div>
+<b>步寬（含變異）標示為「未驗證」</b>：目前只有膠帶小驗證，窄步略高估、寬步低估約 1–2 cm。所有運算在本機完成，未上傳任何資料。</div>
 </body></html>"""
     with open(path, "w", encoding="utf-8") as f:
         f.write(doc)
@@ -431,9 +431,9 @@ def now_str():
 
 # ================================================================ 側面報告
 SIDE_METRICS = [
-    ("stance_pct", "站立期", "% 週期", 1, "健康成人約 60%；側面速度法，待步道驗證"),
+    ("stance_pct", "站立期", "% 週期", 1, "健康成人約 60%；待與參考標準比對"),
     ("swing_pct", "擺盪期", "% 週期", 1, ""),
-    ("double_support_pct", "雙腳支撐期", "% 週期", 1, "健康成人約 20%；DCM 隨嚴重度上升"),
+    ("double_support_pct", "雙腳支撐期［未驗證］", "% 週期", 1, "健康成人約 20%；DCM 隨嚴重度上升。未與參考標準比對；同一人各趟仍差 4–7 個百分點"),
     ("stance_time_s", "站立時間", "s", 2, ""),
     ("swing_time_s", "擺盪時間", "s", 2, ""),
     ("stride_time_s", "步幅時間", "s", 2, ""),
@@ -523,7 +523,7 @@ td.note{{text-align:left;color:#666;font-size:12px}} img{{max-width:100%;display
 <th>單格對調修正</th><th>作廢格數</th><th>整趟對調</th><th>修正後與模型原標記不同的格數 / 總格數</th></tr>{lr_rows}</table>
 <div class="meta">規則：畫面未鏡像時，往畫面右方走 → 靠鏡頭的是右腳；往左走 → 左腳。靠鏡頭的腳站立時在畫面上位置較低，用來檢查模型的標記；不符就整趟對調。</div>
 <h2>品質檢查</h2>{imgs}
-<div class="disc">研究用原型，側面分析目前只經過合成資料驗證，尚未與步道或動作擷取系統比對，不可作為臨床診斷依據。所有運算在本機完成。</div>
+<div class="disc">研究用原型，側面分析目前只經過合成資料驗證，尚未與步道或動作擷取系統比對，不可作為臨床診斷依據。<b>雙腳支撐期標示為「未驗證」</b>，請勿當作正式結果。所有運算在本機完成。</div>
 </body></html>"""
     with open(path, "w", encoding="utf-8") as f:
         f.write(doc)
