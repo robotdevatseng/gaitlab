@@ -17,6 +17,7 @@ from . import calib as C
 from . import pose as P
 from . import gait as G
 from . import report as R
+from . import version as V
 
 
 def _floor(text: str) -> tuple[float, float]:
@@ -164,7 +165,7 @@ def run_side(args):
               f"｜{s['lr']['walking_direction_image']}，近側 = {s['lr'].get('near_side_expected')} 腳")
         results.append((name, r))
     _archive_old(args.out, ("side_report.html", "side_summary.json"))
-    meta = {"subject": args.subject, "created": R.now_str(), "gap_m": args.gap,
+    meta = {"subject": args.subject, "created": R.now_str(), **V.version_meta(), "gap_m": args.gap,
             "gap_note": "側面標記間距只影響側面的「距離」指標（步長、步速），兩者與間距成正比；"
                         "不影響時間與比例指標（站立期、擺盪期、雙腳支撐期、步頻、步時、週期時間）與膝角度；也不影響正面分析的任何指標。",
             "validation_status": {"double_support_pct": "未驗證（尚未與參考標準比對；同一人各趟仍差 4–7 個百分點）",
@@ -177,7 +178,10 @@ def run_side(args):
                        "trials": {}}, f, ensure_ascii=False, indent=2)
         R.write_blocked_html(os.path.join(args.out, "side_report.html"), meta, "側面步態分析")
         sys.exit("沒有可分析的側面影片：" + "；".join(f"{k}：{v}" for k, v in skipped.items()))
-    agg = S.aggregate_side([r for _, r in results])
+    agg = S.aggregate_side([r for _, r in results], [n for n, _ in results])
+    for n, r in results:
+        if r.summary.get("near_side_conflict"):
+            print(f"[{n}] ⚠ {r.summary['near_side_conflict_note']}")
     R.write_side_html(os.path.join(args.out, "side_report.html"), meta, agg, results)
     with open(os.path.join(args.out, "side_summary.json"), "w", encoding="utf-8") as f:
         json.dump({"meta": meta, "overall": clean(agg), "overall_null_reasons": R.side_null_reasons(agg),
@@ -383,10 +387,20 @@ def run_analyze(args):
         results.append((name, res))
 
     _archive_old(args.out, ("report.html", "summary.json", "steps.csv"))
-    meta = {"subject": args.subject, "created": R.now_str(), "videos": args.videos,
+    meta = {"subject": args.subject, "created": R.now_str(), **V.version_meta(), "videos": args.videos,
             "floor_m": [w, l], "cam_height_m": args.cam_height,
             "calibration": "每支影片各自校正", "calibration_per_video": calibs,
             "calib_check": geo0, "lateral_point": args.lateral, "footwear": "赤腳" if barefoot else "穿鞋",
+            "footwear_source": getattr(args, "barefoot_source", None) or "命令列參數",
+            # 高度修正係數：步長與步寬用的是兩個不同的值，分開記錄
+            "height_correction": {
+                "step_length_factor": float((prm.cam_height_m - prm.landmark_height_m) / prm.cam_height_m)
+                if prm.cam_height_m > prm.landmark_height_m > 0 else 1.0,
+                "step_length_landmark_height_m": prm.landmark_height_m,
+                "step_width_factor": float((prm.cam_height_m - (prm.ankle_height_m if prm.lateral_point == "ankle" else prm.landmark_height_m)) / prm.cam_height_m)
+                if prm.cam_height_m > (prm.ankle_height_m if prm.lateral_point == "ankle" else prm.landmark_height_m) > 0 else 1.0,
+                "step_width_landmark_height_m": prm.ankle_height_m if prm.lateral_point == "ankle" else prm.landmark_height_m,
+                "step_width_lateral_point": prm.lateral_point},
             "validation_status": {"step_width": "未驗證（尚未與壓力步道或其他參考標準比對；僅膠帶小驗證）",
                                   "speed_cadence_stride": "膠帶小驗證：步長 60 → 59.3–60.2 cm、步幅 120 → 118.1–119.3 cm"},
             "not_analyzed": skipped}

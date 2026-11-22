@@ -700,6 +700,9 @@ def analyze(lm: dict, H: np.ndarray, floor_w: float, floor_l: float,
             else not any((not np.isnan(st.heel[1])) and st.heel[1] < 0 for st in stances)),
         "stance_speed_threshold_m_s": dbg["threshold"],
         "height_correction_factor": ks,
+        # 步寬實際使用的係數（左右位置用的關鍵點高度；與上面步長用的係數是兩個不同的值）
+        "step_width_height_correction_factor": ks_lat,
+        "step_width_lateral_point": prm.lateral_point,
     }
     res = GaitResult(summary, steps, stances, floor, xy, dbg)
     res.debug_t = t  # type: ignore[attr-defined]
