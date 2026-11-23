@@ -28,49 +28,112 @@ def _floor(text: str) -> tuple[float, float]:
     return w, l
 
 
+def _iter_frames(video: str, end: int, step: int):
+    """依序讀前 end 格，每 step 格交出一張。讀完或中斷都會關掉影片。"""
+    cap = P.open_video(video)
+    i = 0
+    try:
+        while i < end:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if i % step == 0:
+                yield frame
+            i += 1
+    finally:
+        cap.release()
+
+
+def _record_from_samples(samples: dict) -> dict:
+    """全畫面偵測：位置用第一次看到的（與舊版 setdefault 相同），次數與 SD 用這一段裡的全部樣本。"""
+    records = {}
+    for k, pts in samples.items():
+        if not pts:
+            continue
+        stacked = np.stack(pts, 0)
+        records[k] = {"method": "aruco", "center": np.asarray(pts[0], float),
+                      "n": int(len(pts)), "sd": stacked.std(0)}
+    return records
+
+
 def do_calibrate(video: str, floor, method: str, points: str | None, out: str, prev: dict | None = None) -> dict:
     """對「這一支影片」做地板校正。prev = 同一次拍攝中前一支影片的校正：
     只有在解析度相同、且這支影片自動辨識到的標記位置與 prev 相差 < 3 像素（鏡頭確實沒動）時，
-    才沿用 prev 中沒辨識到的那幾個點；否則請使用者重新點選。"""
+    才沿用 prev 中沒辨識到的那幾個點；否則請使用者重新點選。
+
+    全畫面已找到四個標記時，不做遠端放大（method 維持 aruco）。缺 ID 2 或 3 時，
+    先在由近端位置推出的範圍裡放大再偵一次，仍缺的才點選。method 逐點記錄來源。
+    """
     w, l = floor
     frame = P.read_frame(video, 0)
     size = (frame.shape[1], frame.shape[0])
     vname = os.path.basename(video)
+    names = {0: "近左", 1: "近右", 2: "遠右", 3: "遠左"}
+    note = None
     if method == "points":
         if not points:
             sys.exit("使用 --method points 時必須同時給 --points x0,y0;x1,y1;x2,y2;x3,y3")
-        pts, used = C.parse_points(points), "points"
+        parsed = C.parse_points(points)
+        records = {k: {"method": "points", "center": np.asarray(parsed[k], float), "n": 1, "sd": None}
+                   for k in range(4)}
     else:
-        pts, used, found = None, None, {}
+        records = {}
         if method in ("auto", "aruco"):
-            # 前 2 秒內多取幾格，累積偵測到的標記（遠端標記常因太扁而偵測不到）
+            # 前 2 秒內多取幾格。四點都找到就停，位置仍用每一點第一次出現的那次。
             info = P.video_info(video)
+            samples = {k: [] for k in range(4)}
             for i in range(0, min(info["n_frames"], int(info["fps"] * 2)), max(1, int(info["fps"] // 4))):
                 for k, v in C.detect_aruco_ids(P.read_frame(video, i)).items():
-                    found.setdefault(k, v)
-                if len(found) == 4:
+                    samples[k].append(np.asarray(v, float))
+                if all(samples[k] for k in range(4)):
                     break
-            if len(found) == 4:
-                pts, used = np.float32([found[k] for k in range(4)]), "aruco"
-            elif method == "aruco":
-                sys.exit(f"只找到標記 {sorted(found)}，請改用 --method auto 或 click")
-        if pts is None and prev is not None and found and list(prev.get("image_size_px") or []) == list(size):
+            records = _record_from_samples(samples)
+            missing_far = [k for k in C.FAR_MARKER_IDS if k not in records]
+            if missing_far:
+                # 全畫面常常只剩近端。遠端很扁，先放大再偵，還沒有才交給點選。
+                print(f"全畫面未找到標記 {'、'.join(names[k] for k in missing_far)}，改在遠端範圍放大 2／3／4 倍再偵測…")
+                near = {k: records[k]["center"] for k in (0, 1) if k in records}
+                roi_found = C.search_far_markers(
+                    _iter_frames(video, end=min(int(info["n_frames"]), 240), step=2),
+                    near, wanted=missing_far, frame_shape=frame.shape)
+                for k, rec in roi_found.items():
+                    if k not in records:
+                        records[k] = rec
+                still = [k for k in missing_far if k not in records]
+                got = [k for k in missing_far if k in roi_found]
+                if got:
+                    print(f"放大後找到：{'、'.join(names[k] for k in got)}")
+                if still:
+                    print(f"放大後仍沒有：{'、'.join(names[k] for k in still)}")
+            if method == "aruco" and any(k not in records for k in range(4)):
+                sys.exit(f"只找到標記 {sorted(records)}，請改用 --method auto 或 click")
+        if any(k not in records for k in range(4)) and prev is not None and records \
+                and list(prev.get("image_size_px") or []) == list(size):
             pp = np.asarray(prev["image_points_px"], float)
-            dev = max(float(np.hypot(*(np.asarray(found[k]) - pp[k]))) for k in found)
+            dev = max(float(np.hypot(*(np.asarray(records[k]["center"]) - pp[k]))) for k in records)
             if dev < 3.0:
-                pts = np.float32([found[k] if k in found else pp[k] for k in range(4)])
-                used = f"aruco+沿用前一支（鏡頭未移動，標記位置相差 {dev:.1f} 像素）"
+                for k in range(4):
+                    if k not in records:
+                        records[k] = {"method": "reused_previous", "center": pp[k], "n": 1, "sd": None}
+                note = f"鏡頭未移動，標記位置相差 {dev:.1f} 像素"
             else:
                 print(f"這支影片的標記位置與前一支相差 {dev:.0f} 像素（鏡頭或畫面有變動），需要重新點選。")
-        if pts is None:
-            miss = [k for k in range(4) if k not in found]
-            names = {0: "近左", 1: "近右", 2: "遠右", 3: "遠左"}
+        if any(k not in records for k in range(4)):
+            miss = [k for k in range(4) if k not in records]
+            found = {k: records[k]["center"] for k in records}
             if found:
                 print(f"已自動找到標記 {sorted(found)}；請在視窗中依序點選：{' → '.join(names[k] for k in miss)}（會自動吸附到標記中心），按 Enter 確認")
             else:
                 print("未偵測到 ArUco 標記，請在視窗中依序點選：近左 → 近右 → 遠右 → 遠左，按 Enter 確認")
-            pts, used = C.click_points(frame, found), ("aruco+click" if found else "click")
-    c = C.save_calib(out, pts, w, l, used, image_size=size, video=vname)
+            clicked = C.click_points(frame, found)
+            manual = set(getattr(C.click_points, "last_manual", set(range(4))))
+            for k in range(4):
+                if k in manual or k not in records:
+                    records[k] = {"method": "click", "center": np.asarray(clicked[k], float), "n": 1, "sd": None}
+    pts = np.float32([records[k]["center"] for k in range(4)])
+    used = C.format_calib_method(records, note)
+    c = C.save_calib(out, pts, w, l, used, image_size=size, video=vname,
+                     marker_detection=C.marker_detection_json(records))
     print(f"校正完成（{used}），已存成 {out}")
     return C.load_calib(out)
 

@@ -248,6 +248,14 @@ python -m gaitlab static S01_static.mov --calib P001_result/calib.json --cam-hei
 - **側面近側判定衝突**：`near_side`（站立期腳跟高度）與 `near_side_expected`（行走方向推定）不一致時，`near_side_conflict = true`，兩個欄位都保留；該趟膝峰值**不納入**合併平均（`knee_peak_excluded_conflict_trials`、`knee_peak_included_trials` 寫明排除與納入的趟），其餘指標照常納入。兩者會不一致的原因：算法不同——前者只看腳跟一點、取各次站立期的中位數、沒有最小差距門檻；受試者沿走道移動時腳跟在畫面上的高度會漂移，兩腳偵測到的站立期次數又不同時，中位數可能反過來（IMG_1525：整趟三點高度差 8 px 判左腳近，站立期腳跟中位數差 5 px 判右腳近）。
 - 自我檢查：`python tests/test_workorder_v3.py`。
 
+**遠端標記放大後再偵測（四點都找到時，流程與以前相同）**
+
+- 正面直拍時，遠端標記（ID 2 遠右、ID 3 遠左）在畫面上很扁，大約 85×20 像素。全畫面用預設參數常常只找到近端的 0 和 1。
+- **四個都在全畫面找到時，不做額外搜尋**，校正檔的 `method` 仍是 `aruco`，點的位置仍是每一點第一次被看到的位置。
+- 缺 2 或 3 時，先用近端標記的位置推出遠端該在的一塊範圍（沒有近端就用畫面中央偏上的預設帶），把該範圍以 INTER_CUBIC 放大 2、3、4 倍，字典與 DetectorParameters 都與全畫面相同，再偵一次。只接受 ID 0–3。每個缺的 ID 湊滿 15 次偵測就停，否則從第 0 格掃到第 239 格、每隔一格。中心是四個角的平均，各次偵測再取中位數。放大後仍缺的標記才請使用者點選。
+- 校正檔 `method`：四點來源相同時寫一個詞（`aruco`、`click`、`points`）；來源不同就逐點寫，例如 `0:aruco(n=2,sd=0.10/0.20);2:aruco_roi_upscale(n=15,sd=0.35/0.12);3:click(n=1)`。不再把「有自動、也有點選」整組標成 `aruco+click`。`marker_detection` 另以數字記下每個點的來源、次數與標準差。
+- 自我檢查（不需要影片）：`python tests/test_far_marker_roi.py`。
+
 **驗證狀態總表（2026-11-13，12/10 交接前不借壓力步道）**
 
 | 指標 | 狀態 |
