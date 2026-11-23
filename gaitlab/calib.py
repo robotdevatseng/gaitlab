@@ -11,6 +11,15 @@ import numpy as np
 import cv2
 
 ARUCO_DICT = cv2.aruco.DICT_4X4_50
+# 地板四角只用這四個 ID。放寬偵測參數時會冒出 17、37 這類雜訊，一律丟掉。
+FLOOR_MARKER_IDS = (0, 1, 2, 3)
+FAR_MARKER_IDS = (2, 3)
+ROI_UPSCALE_SCALES = (2, 3, 4)
+# 遠端搜尋帶：從近端標記那一列，沿「遠離鏡頭」的方向量畫面高度的比例。
+# 正面直拍、近端靠近畫面下緣時，5 m 量測區的遠端大約落在 0.25–0.40
+# （實測 IMG_1554 約 0.27；合成的強透視約 0.37）。0.08–0.48 兩者都包得住，又不會蓋到近端標記。
+FAR_ROI_Y_ABOVE = (0.08, 0.48)
+FAR_ROI_X_MARGIN_FRAC = 0.08
 
 
 def floor_corners(width_m: float, length_m: float) -> np.ndarray:
@@ -115,6 +124,186 @@ def detect_aruco(frame: np.ndarray) -> np.ndarray | None:
     return np.float32([found[k] for k in range(4)])
 
 
+def _as_points(centers) -> np.ndarray:
+    if isinstance(centers, dict):
+        if not centers:
+            return np.zeros((0, 2))
+        return np.asarray(list(centers.values()), float).reshape(-1, 2)
+    return np.asarray(centers, float).reshape(-1, 2)
+
+
+def far_marker_roi(frame_shape, near_centers=None, *,
+                   y_above: tuple[float, float] = FAR_ROI_Y_ABOVE,
+                   x_margin_frac: float = FAR_ROI_X_MARGIN_FRAC) -> tuple[int, int, int, int]:
+    """遠端標記（ID 2、3）的搜尋範圍，像素座標 (x0, y0, x1, y1)，右下不含。
+
+    不把範圍寫死。有近端標記時：遠端在畫面上位於近端的「遠離鏡頭」那一側
+    （近端靠近下緣就往上找，靠近上緣就往下找），左右不超出近端兩點再加一點邊。
+    沒有近端標記時，用畫面中央偏上的一塊預設帶。y_above、x_margin_frac 可改。
+    """
+    h, w = int(frame_shape[0]), int(frame_shape[1])
+
+    def fallback():
+        return (int(0.15 * w), int(0.45 * h), int(0.85 * w), int(0.72 * h))
+
+    pts = _as_points(near_centers) if near_centers is not None else np.zeros((0, 2))
+    if len(pts) == 0:
+        return fallback()
+    y_near = float(np.median(pts[:, 1]))
+    x_lo, x_hi = float(pts[:, 0].min()), float(pts[:, 0].max())
+    if len(pts) < 2 or (x_hi - x_lo) < 0.05 * w:
+        x_lo, x_hi, margin = 0.15 * w, 0.85 * w, 0.0
+    else:
+        margin = float(x_margin_frac) * w
+    # 近端靠近哪一側的邊緣，遠端就往另一側找
+    if (h - 1 - y_near) <= y_near:
+        y_a = y_near - y_above[1] * h
+        y_b = y_near - y_above[0] * h
+    else:
+        y_a = y_near + y_above[0] * h
+        y_b = y_near + y_above[1] * h
+    x0 = max(0, int(np.floor(x_lo - margin)))
+    x1 = min(w, int(np.ceil(x_hi + margin)))
+    y0 = max(0, int(np.floor(min(y_a, y_b))))
+    y1 = min(h, int(np.ceil(max(y_a, y_b))))
+    if x1 <= x0 or y1 <= y0:
+        return fallback()
+    return (x0, y0, x1, y1)
+
+
+def _gray(frame: np.ndarray) -> np.ndarray:
+    if frame.ndim == 2:
+        return frame
+    return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+
+def _aruco_detector():
+    return cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(ARUCO_DICT),
+                                   cv2.aruco.DetectorParameters())
+
+
+def detect_roi_upscale(frame: np.ndarray, roi, *,
+                       ids=FLOOR_MARKER_IDS,
+                       scales=ROI_UPSCALE_SCALES) -> dict[int, list]:
+    """把 roi 用 INTER_CUBIC 放大 scales 倍後，以預設參數偵測。
+
+    中心是四個角的平均，再換算回整張畫面的像素。只留下 ID 0–3（而且要在 ids 裡）；
+    17、37 這類假標記直接丟棄。回傳 {id: [中心, ...]}，三種倍率的結果都留著。
+    """
+    h, w = frame.shape[:2]
+    x0, y0, x1, y1 = (int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3]))
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(w, x1), min(h, y1)
+    if x1 <= x0 or y1 <= y0:
+        return {}
+    allowed = {int(i) for i in ids if int(i) in FLOOR_MARKER_IDS}
+    if not allowed:
+        return {}
+    gray = _gray(frame)[y0:y1, x0:x1]
+    detector = _aruco_detector()
+    found: dict[int, list] = {}
+    origin = np.array([x0, y0], float)
+    for scale in scales:
+        up = cv2.resize(gray, None, fx=float(scale), fy=float(scale), interpolation=cv2.INTER_CUBIC)
+        corners, ids_found, _ = detector.detectMarkers(up)
+        if ids_found is None:
+            continue
+        for cc, i in zip(corners, ids_found.flatten()):
+            i = int(i)
+            if i not in allowed:
+                continue
+            center = cc.reshape(4, 2).mean(axis=0) / float(scale) + origin
+            found.setdefault(i, []).append(center)
+    return found
+
+
+def search_far_markers(frames, near_centers=None, *,
+                       wanted=FAR_MARKER_IDS,
+                       scales=ROI_UPSCALE_SCALES,
+                       min_keep: int = 15,
+                       frame_shape=None,
+                       roi=None) -> dict[int, dict]:
+    """遠端標記後備搜尋。frames 是 BGR 影格（可為產生器）。
+
+    範圍用 far_marker_roi 從近端位置推出來（roi 有給就用給的）。
+    每個想找的 ID 湊滿 min_keep 次就停；否則把傳進來的影格掃完。
+    中心取所有偵測（每格、每種倍率各算一次）的中位數，與全畫面偵測同一種定義。
+    """
+    wanted = tuple(int(i) for i in wanted if int(i) in FLOOR_MARKER_IDS)
+    buckets: dict[int, list] = {i: [] for i in wanted}
+    used_roi = roi
+    for frame in frames:
+        if used_roi is None:
+            used_roi = far_marker_roi(frame_shape if frame_shape is not None else frame.shape, near_centers)
+        for i, centers in detect_roi_upscale(frame, used_roi, ids=wanted, scales=scales).items():
+            buckets[i].extend(centers)
+        if min_keep is not None and wanted and all(len(buckets[i]) >= min_keep for i in wanted):
+            break
+    out = {}
+    for i, centers in buckets.items():
+        if not centers:
+            continue
+        stacked = np.stack(centers, 0)
+        out[i] = {
+            "method": "aruco_roi_upscale",
+            "center": np.median(stacked, 0),
+            "n": int(stacked.shape[0]),
+            "sd": stacked.std(0),
+            "roi_px": None if used_roi is None else [int(v) for v in used_roi],
+            "scales": [int(s) for s in scales],
+        }
+    return out
+
+
+def format_calib_method(records: dict, note: str | None = None) -> str:
+    """校正檔的 method 字串。四點來源相同且是一般全畫面偵測時維持 "aruco"。
+
+    來源不相同（例如有的點是放大後找到的、有的是點選的）就逐點寫出來，
+    並附上偵測次數與 x/y 標準差，不再把整組標成 aruco+click。
+    """
+    methods = [records[k]["method"] for k in range(4)]
+    if len(set(methods)) == 1 and methods[0] == "aruco":
+        text = "aruco"
+    elif len(set(methods)) == 1 and methods[0] in ("click", "points"):
+        text = methods[0]
+    else:
+        parts = []
+        for k in range(4):
+            r = records[k]
+            n = r.get("n")
+            sd = r.get("sd")
+            if n is None:
+                parts.append(f"{k}:{r['method']}")
+            elif sd is None:
+                parts.append(f"{k}:{r['method']}(n={int(n)})")
+            else:
+                parts.append(f"{k}:{r['method']}(n={int(n)},sd={float(sd[0]):.2f}/{float(sd[1]):.2f})")
+        text = ";".join(parts)
+    if note:
+        text = f"{text}｜{note}"
+    return text
+
+
+def marker_detection_json(records: dict) -> dict:
+    """每個角點的來源、次數、標準差。JSON 物件的鍵是 "0"–"3"。"""
+    out = {}
+    for k in range(4):
+        r = records[k]
+        sd = r.get("sd")
+        item = {
+            "method": r["method"],
+            "n": None if r.get("n") is None else int(r["n"]),
+            "sd_px": None if sd is None else [float(sd[0]), float(sd[1])],
+            "center_px": [float(r["center"][0]), float(r["center"][1])],
+        }
+        if r.get("roi_px") is not None:
+            item["roi_px"] = [int(v) for v in r["roi_px"]]
+        if r.get("scales") is not None:
+            item["scales"] = [int(v) for v in r["scales"]]
+        out[str(k)] = item
+    return out
+
+
 def snap_to_marker(frame: np.ndarray, x: float, y: float, r: int = 60) -> tuple[float, float]:
     """把點選位置吸附到附近黑色標記的中心（遠端標記在畫面上很扁，手點容易偏）。找不到就維持原點。"""
     h, w = frame.shape[:2]
@@ -145,6 +334,8 @@ def click_points(frame: np.ndarray, known: dict | None = None,
     n_pts = len(labels)
     known = dict(known or {})
     pts: dict[int, tuple[float, float]] = {k: tuple(v) for k, v in known.items()}
+    manual: set[int] = set()
+    click_points.last_manual = manual
     scale = min(1.0, 1400 / frame.shape[1], 900 / frame.shape[0])
     disp0 = cv2.resize(frame, None, fx=scale, fy=scale)
 
@@ -170,6 +361,7 @@ def click_points(frame: np.ndarray, known: dict | None = None,
         m = missing()
         if event == cv2.EVENT_LBUTTONDOWN and m:
             pts[m[0]] = snap_to_marker(frame, x / scale, y / scale)
+            manual.add(m[0])
             draw()
 
     cv2.namedWindow("floor calibration")
@@ -182,6 +374,7 @@ def click_points(frame: np.ndarray, known: dict | None = None,
         if key == ord("r"):          # 全部重點（包含自動偵測到的）
             pts.clear()
             known.clear()
+            manual.clear()
             draw()
         if key == 27:
             cv2.destroyAllWindows()
@@ -191,7 +384,7 @@ def click_points(frame: np.ndarray, known: dict | None = None,
 
 
 def save_calib(path: str, img_pts, width_m: float, length_m: float, method: str,
-               image_size=None, video: str | None = None) -> dict:
+               image_size=None, video: str | None = None, marker_detection: dict | None = None) -> dict:
     H = homography(img_pts, width_m, length_m)
     calib = {
         "method": method,
@@ -202,6 +395,8 @@ def save_calib(path: str, img_pts, width_m: float, length_m: float, method: str,
         "floor_length_m": length_m,
         "H": H.tolist(),
     }
+    if marker_detection is not None:
+        calib["marker_detection"] = marker_detection
     with open(path, "w", encoding="utf-8") as f:
         json.dump(calib, f, indent=2, ensure_ascii=False)
     return calib

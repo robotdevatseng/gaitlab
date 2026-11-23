@@ -301,6 +301,19 @@ def quality_flags(agg, results, meta=None) -> list[str]:
     return flags
 
 
+def _hc_txt(meta):
+    hc = meta.get("height_correction") or {}
+    if not hc:
+        return "高度修正係數：未記錄"
+    return (f"高度修正係數：步長 {hc.get('step_length_factor', float('nan')):.6f}（關鍵點高 {hc.get('step_length_landmark_height_m')} m）；"
+            f"步寬 {hc.get('step_width_factor', float('nan')):.6f}（關鍵點高 {hc.get('step_width_landmark_height_m')} m）")
+
+
+def _fw_src(meta):
+    s = meta.get("footwear_source")
+    return f"（來源：{s}）" if s else ""
+
+
 def _geo_txt(meta):
     g = meta.get("calib_check") or {}
     return f"（校正反推 {g['cam_height_m']:.2f} m）" if g else ""
@@ -347,7 +360,8 @@ td.note{{text-align:left;color:#666;font-size:12px}} img{{max-width:100%;display
 </style></head><body>
 <h1>步態分析報告（研究原型）</h1>
 <div class="meta">受試者：{html.escape(meta.get('subject','—'))}　|　分析時間：{meta['created']}　|　趟數：{len(results)}　|
-地板量測區：{floor_w:g} m × {floor_l:g} m　|　鏡頭高度設定：{meta.get('cam_height_m')} m{_geo_txt(meta)}　|　步寬左右位置：{'腳踝點' if meta.get('lateral_point') == 'ankle' else '腳跟點'}　|　{meta.get('footwear', '穿鞋')}</div>
+地板量測區：{floor_w:g} m × {floor_l:g} m　|　鏡頭高度設定：{meta.get('cam_height_m')} m{_geo_txt(meta)}　|　步寬左右位置：{'腳踝點' if meta.get('lateral_point') == 'ankle' else '腳跟點'}　|　{meta.get('footwear', '穿鞋')}{_fw_src(meta)}</div>
+<div class="meta">{_hc_txt(meta)}　|　程式版本：{meta.get('program_version', '—')}（commit {str(meta.get('commit', '未取得'))[:7]}）</div>
 {flag_html}
 <h2>主要指標</h2>
 <table><tr><th style="text-align:left">指標</th><th>合併</th><th></th>{per_head}<th style="text-align:left">說明</th></tr>{rows}</table>
@@ -486,9 +500,15 @@ def write_side_html(path, meta, agg, results):
         lr = r.summary.get("lr") or {}
         lr_rows += (f"<tr><td class='lab'>{html.escape(n)}</td><td>{lr.get('walking_direction_image','—')}</td>"
                     f"<td>{r.summary.get('direction','—')}</td><td>{ {'L':'左腳','R':'右腳'}.get(lr.get('near_side_expected'),'—')}</td>"
+                    f"<td>{ {'L':'左腳','R':'右腳'}.get(r.summary.get('near_side'),'—')}</td>"
+                    f"<td>{'<b>衝突</b>' if r.summary.get('near_side_conflict') else '一致'}</td>"
                     f"<td>{html.escape(str(lr.get('mirrored_check','—')))}</td>"
                     f"<td>{lr.get('frames_swapped_locally','—')}</td><td>{lr.get('frames_discarded','—')}</td>"
                     f"<td>{'是' if lr.get('whole_trial_flipped') else '否'}</td><td>{lr.get('frames_relabelled','—')} / {lr.get('frames_total','—')}</td></tr>")
+        if r.summary.get("near_side_conflict"):
+            flags.append(f"{n}：近側判定衝突（行走方向推定為{ {'L':'左','R':'右'}.get(r.summary.get('near_side_expected'),'？')}腳、"
+                         f"站立期腳跟高度判為{ {'L':'左','R':'右'}.get(r.summary.get('near_side'),'？')}腳）。兩個判定都保留；"
+                         "本趟膝峰值不納入合併平均，其餘指標照常納入。")
         if lr and not lr.get("near_side_confident", True):
             flags.append(f"{n}：兩腳在畫面上的高度差太小，無法由畫面確認哪一腳靠近鏡頭；左右腳沿用模型標記，左右分開的指標請保留。")
         if lr.get("frames_total") and (lr.get("frames_discarded") or 0) > 0.1 * lr["frames_total"]:
@@ -499,6 +519,13 @@ def write_side_html(path, meta, agg, results):
     flag_html = ("<div class='flags'><b>品質提醒</b><ul>" + "".join(f"<li>{html.escape(f)}</li>" for f in flags) + "</ul></div>") if flags else \
         "<div class='ok'>品質檢查通過。</div>"
     imgs = "".join(f"<img src='data:image/png;base64,{fig_side(n, r)}'>" for n, r in results)
+    inc = agg.get("knee_peak_included_trials") or {}
+    knee_note = ""
+    if inc or agg.get("knee_peak_note"):
+        knee_note = ("<div class='meta'>膝峰值合併平均納入的趟：左膝 " + html.escape("、".join(inc.get("L") or []) or "無")
+                     + "；右膝 " + html.escape("、".join(inc.get("R") or []) or "無") + "。"
+                     + (html.escape(agg.get("knee_peak_note") or "") + "。" if agg.get("knee_peak_note") else "") + "</div>")
+    ver = f"程式版本：{meta.get('program_version', '—')}（commit {str(meta.get('commit', '未取得'))[:7]}）"
     doc = f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>側面步態報告 {html.escape(meta.get('subject',''))}</title>
 <style>
@@ -513,13 +540,15 @@ td.note{{text-align:left;color:#666;font-size:12px}} img{{max-width:100%;display
 .disc{{color:#888;font-size:12px;margin-top:32px}}
 </style></head><body>
 <h1>側面步態報告（研究原型）</h1>
-<div class="meta">受試者：{html.escape(meta.get('subject','—'))}　|　分析時間：{meta['created']}　|　趟數：{len(results)}　|　側面標記間距（實際使用值）：{meta.get('gap_m')} m</div>
+<div class="meta">受試者：{html.escape(meta.get('subject','—'))}　|　分析時間：{meta['created']}　|　趟數：{len(results)}　|　側面標記間距（實際使用值）：{meta.get('gap_m')} m　|　{html.escape(ver)}</div>
 <div class="meta" style="margin-top:4px">{html.escape(meta.get('gap_note',''))}</div>
 {flag_html}
 <h2>主要指標</h2>
 <table><tr><th style="text-align:left">指標</th><th>合併</th><th></th>{head}<th style="text-align:left">說明</th></tr>{rows}</table>
+{knee_note}
 <h2>左右腳判定（一律為受試者自己的左、右）</h2>
-<table><tr><th style="text-align:left">趟</th><th>行走方向（畫面）</th><th>行走方向（標記）</th><th>靠鏡頭的腳</th><th>鏡像檢查</th>
+<table><tr><th style="text-align:left">趟</th><th>行走方向（畫面）</th><th>行走方向（標記）</th><th>靠鏡頭的腳（行走方向推定）</th>
+<th>靠鏡頭的腳（站立期腳跟高度）</th><th>兩者</th><th>鏡像檢查</th>
 <th>單格對調修正</th><th>作廢格數</th><th>整趟對調</th><th>修正後與模型原標記不同的格數 / 總格數</th></tr>{lr_rows}</table>
 <div class="meta">規則：畫面未鏡像時，往畫面右方走 → 靠鏡頭的是右腳；往左走 → 左腳。靠鏡頭的腳站立時在畫面上位置較低，用來檢查模型的標記；不符就整趟對調。</div>
 <h2>品質檢查</h2>{imgs}

@@ -507,6 +507,14 @@ def analyze_side(lm: dict, markers_px: np.ndarray, gap_m: float = 2.04, prm: Sid
         return float(np.median(ys)) if ys else np.nan
     yL, yR = stance_heel_y("L"), stance_heel_y("R")
     near = "L" if (np.isfinite(yL) and np.isfinite(yR) and yL > yR) else ("R" if np.isfinite(yL) and np.isfinite(yR) else "?")
+    # 近側判定有兩個來源，算法不同，可能互相矛盾（2026-11 IMG_1525）：
+    #   lr.near_side_expected：由行走方向推定（往畫面右走 → 右腳靠鏡頭）。assign_anatomical 另用
+    #       「整趟踝、跟、尖三點的第 90 百分位高度」檢查模型標記，只有在高度差 ≥ 4 px 且與推定不符時才整趟對調。
+    #   near_side：這裡用「各次站立期腳跟高度的中位數」再比一次，只看腳跟一點、沒有最小差距門檻。
+    #       受試者沿走道移動時腳跟在畫面上的高度會漂移，兩腳偵測到的站立期次數又不同，中位數就可能反過來。
+    # 兩者不一致時不靜默選邊：兩個欄位都保留、亮衝突旗標，該趟膝峰值不納入組平均（見 aggregate_side）。
+    expected = lr_info.get("near_side_expected")
+    conflict = bool(near in ("L", "R") and expected in ("L", "R") and near != expected)
     m = lambda x: float(np.mean(x)) if len(x) else np.nan  # noqa: E731
     cv = lambda x: float(np.std(x, ddof=1) / np.mean(x) * 100) if len(x) > 1 else np.nan  # noqa: E731
     summary = {
@@ -530,12 +538,19 @@ def analyze_side(lm: dict, markers_px: np.ndarray, gap_m: float = 2.04, prm: Sid
         "knee_peak_swing_L_deg": m(knee_pk["L"]),
         "knee_peak_swing_R_deg": m(knee_pk["R"]),
         "near_side": near,
+        "near_side_expected": expected,
+        "near_side_stance_heel_gap_px": float(yL - yR) if (np.isfinite(yL) and np.isfinite(yR)) else np.nan,
+        "near_side_conflict": conflict,
+        "near_side_conflict_note": (f"近側判定衝突：站立期腳跟高度判為 {near}，行走方向推定為 {expected}；"
+                                    "兩個欄位都保留，本趟膝峰值不納入組平均") if conflict else "",
         "speed_threshold_m_s": thr,
     }
     return SideResult(summary, events, steps, t, sig)
 
 
-def aggregate_side(results: list[SideResult]) -> dict:
+def aggregate_side(results: list[SideResult], names: list[str] | None = None) -> dict:
+    """多趟合併。names：各趟名稱（用來在輸出寫明膝峰值納入、排除了哪些趟）。"""
+    names = list(names) if names is not None else [f"第 {i + 1} 趟" for i in range(len(results))]
     keys_mean = ["walking_speed_cm_s", "stance_pct", "swing_pct", "double_support_pct", "stance_time_s",
                  "swing_time_s", "stride_time_s", "step_length_cm"]
     out = {"n_trials": len(results), "n_strides": sum(r.summary["n_strides"] for r in results),
@@ -546,9 +561,17 @@ def aggregate_side(results: list[SideResult]) -> dict:
     st = [s["step_time_s"] for r in results for s in r.steps]
     out["cadence_steps_min"] = 60.0 / float(np.mean(st)) if st else np.nan
     out["step_time_cv_pct"] = float(np.std(st, ddof=1) / np.mean(st) * 100) if len(st) > 1 else np.nan
-    # 膝角度：只採用靠近鏡頭那一側（遠側腳被擋住，較不準）
+    # 膝角度：只採用靠近鏡頭那一側（遠側腳被擋住，較不準）。
+    # 近側判定衝突（near_side ≠ near_side_expected）的趟不納入膝峰值組平均，其餘指標照常納入。
+    conflicts = [n for n, r in zip(names, results) if r.summary.get("near_side_conflict")]
+    included = {}
     for s in "LR":
-        vals = [r.summary[f"knee_peak_swing_{s}_deg"] for r in results
-                if r.summary["near_side"] == s and np.isfinite(r.summary[f"knee_peak_swing_{s}_deg"])]
-        out[f"knee_peak_swing_{s}_deg"] = float(np.mean(vals)) if vals else np.nan
+        pairs = [(n, r.summary[f"knee_peak_swing_{s}_deg"]) for n, r in zip(names, results)
+                 if not r.summary.get("near_side_conflict") and r.summary["near_side"] == s
+                 and np.isfinite(r.summary[f"knee_peak_swing_{s}_deg"])]
+        out[f"knee_peak_swing_{s}_deg"] = float(np.mean([v for _, v in pairs])) if pairs else np.nan
+        included[s] = [n for n, _ in pairs]
+    out["knee_peak_included_trials"] = included
+    out["knee_peak_excluded_conflict_trials"] = conflicts
+    out["knee_peak_note"] = ("、".join(conflicts) + " 近側判定衝突、已排除（只排除膝峰值，其餘指標照常納入）") if conflicts else ""
     return out

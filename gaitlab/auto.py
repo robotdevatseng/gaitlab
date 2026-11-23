@@ -119,6 +119,48 @@ def pack(folder: str, out_dir: str, subject: str) -> str:
     return zpath
 
 
+def resolve_barefoot(setting_value, subject: str) -> tuple[bool, str]:
+    """決定實際使用的赤腳旗標，並回傳依據。
+    規則不變：設定檔寫「是」，或受試者資料夾名稱含「赤腳」／barefoot，就按赤腳計算。"""
+    by_setting = setting_value == "是"
+    by_name = "赤腳" in subject or "barefoot" in subject.lower()
+    if by_setting and by_name:
+        return True, "設定檔與資料夾名稱"
+    if by_name:
+        return True, "資料夾名稱"
+    return by_setting, "設定檔"
+
+
+def read_settings_raw() -> list[str]:
+    """設定檔原文（供追溯）；讀不到時回傳空清單。"""
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8-sig") as f:
+            return f.read().splitlines()
+    except UnicodeDecodeError:
+        with open(SETTINGS_FILE, encoding="cp950", errors="replace") as f:
+            return f.read().splitlines()
+    except OSError:
+        return []
+
+
+def write_used_settings(path: str, st: dict, barefoot: bool, barefoot_source: str, ver: dict) -> None:
+    """寫出「使用的設定.txt」：上半是這次實際使用的值，下半是設定檔原文（每行加上「# 原文｜」，不會被當成設定讀回）。
+    不會改動輸入的設定檔。"""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# 這次分析實際使用的值\n")
+        for k, v in st.items():
+            if k == "赤腳":
+                continue
+            f.write(f"{k} = {v}\n")
+        f.write(f"赤腳 = {'是' if barefoot else '否'}\n")
+        f.write(f"赤腳來源 = {barefoot_source}\n")
+        f.write(f"程式版本 = {ver['commit_short']}\n")
+        f.write(f"程式版本號 = {ver['program_version']}\n")
+        f.write("\n# 以下是設定檔（設定.txt）原文，僅供追溯；實際使用值以上方為準\n")
+        for line in read_settings_raw():
+            f.write(f"# 原文｜{line}\n")
+
+
 def run(folder: str | None = None, open_reports: bool = True) -> dict:
     from . import cli as CLI
     from . import calib as C
@@ -131,11 +173,14 @@ def run(folder: str | None = None, open_reports: bool = True) -> dict:
     if not os.path.isdir(folder):
         sys.exit(f"找不到資料夾：{folder}")
     subject = os.path.basename(folder.rstrip("/\\"))
-    barefoot = st.get("赤腳") == "是" or "赤腳" in subject or "barefoot" in subject.lower()
+    barefoot, barefoot_source = resolve_barefoot(st.get("赤腳"), subject)
+    from . import version as V
+    ver = V.get_version()
     front, side, static = classify(folder)
     print(f"受試者：{subject}｜正面影片 {len(front)} 段｜側面影片 {len(side)} 段" + (f"｜站立測試 {len(static)} 段" if static else ""))
     print(f"設定：量測區 {st['量測區寬度']} × {st['量測區長度']} m，鏡頭高 {st['正面鏡頭高度']} m，側面標記距離 {st['側面標記距離']} m，"
-          f"{'赤腳' if barefoot else '穿鞋'}")
+          f"{'赤腳' if barefoot else '穿鞋'}（依據：{barefoot_source}）")
+    print(f"程式版本：{ver['program_version']}（commit {ver['commit_short']}）")
     if not (front or side or static):
         sys.exit("資料夾裡沒有影片（.mov/.mp4）。正面放在「正面」子資料夾、側面放在「側面」子資料夾，或直接放在受試者資料夾。")
 
@@ -155,7 +200,7 @@ def run(folder: str | None = None, open_reports: bool = True) -> dict:
                 videos=front, floor=floor, calib=calib_path if os.path.exists(calib_path) else None, method="auto",
                 points=None, subject=subject,
                 out=os.path.join(out, "正面"), cam_height=st["正面鏡頭高度"], model=1, overlay=False,
-                reuse=True, lateral="ankle", barefoot=barefoot))
+                reuse=True, lateral="ankle", barefoot=barefoot, barefoot_source=barefoot_source))
             reports.append(os.path.join(out, "正面", "report.html"))
             if agg.get("n_trials"):
                 done["front"] = agg
@@ -201,9 +246,7 @@ def run(folder: str | None = None, open_reports: bool = True) -> dict:
         except Exception as e:
             problems.append(f"站立測試失敗：{e}")
 
-    with open(os.path.join(out, "使用的設定.txt"), "w", encoding="utf-8") as f:
-        for k, v in st.items():
-            f.write(f"{k} = {v}\n")
+    write_used_settings(os.path.join(out, "使用的設定.txt"), st, barefoot, barefoot_source, ver)
     zpath = pack(folder, out, subject)
 
     print("\n" + "=" * 60)
