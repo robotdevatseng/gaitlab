@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 
-PROGRAM_VERSION = "0.4.1"      # 人工維護的版本號；每次鎖定版本時更新
+PROGRAM_VERSION = "0.4.2"      # 人工維護的版本號；每次鎖定版本時更新
 UNKNOWN = "未取得"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")

@@ -86,7 +86,7 @@ def _git_env():
 
 
 def _repo_with_tag(root):
-    """做一個只有本機 origin 的倉庫，tag v0.4.1 裡有被追蹤的 設定.txt。"""
+    """做一個只有本機 origin 的倉庫，tag v0.4.2 裡有被追蹤的 設定.txt。"""
     env = _git_env()
     bare = os.path.join(root, "bare.git")
     work = os.path.join(root, "work")
@@ -99,13 +99,13 @@ def _repo_with_tag(root):
     open(os.path.join(work, "README"), "w", encoding="utf-8").write("x\n")
     _git(["add", "設定.txt", "README", "更新程式.command"], work, env)
     _git(["commit", "-m", "base"], work, env)
-    _git(["tag", "-a", "v0.4.1", "-m", "gaitlab 0.4.1 鎖版"], work, env)
-    _git(["push", "origin", "HEAD", "v0.4.1"], work, env)
+    _git(["tag", "-a", "v0.4.2", "-m", "gaitlab 0.4.1 鎖版"], work, env)
+    _git(["push", "origin", "HEAD", "v0.4.2"], work, env)
     return work, env
 
 
 def test_update_command_keeps_modified_settings():
-    print("Mac 更新腳本：設定.txt 有修改時仍切到 v0.4.1，且不覆蓋")
+    print("Mac 更新腳本：設定.txt 有修改時仍切到 v0.4.2，且不覆蓋")
     d = tempfile.mkdtemp()
     try:
         work, env = _repo_with_tag(d)
@@ -116,14 +116,20 @@ def test_update_command_keeps_modified_settings():
         got = open(os.path.join(work, "設定.txt"), encoding="utf-8").read()
         check(got == "USER-SETTINGS\n", f"本機設定還在（實際 {got!r}）")
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=work, text=True).strip()
-        tag = subprocess.check_output(["git", "rev-parse", "v0.4.1^{}"], cwd=work, text=True).strip()
-        check(head == tag, "工作目錄停在 v0.4.1")
+        tag = subprocess.check_output(["git", "rev-parse", "v0.4.2^{}"], cwd=work, text=True).strip()
+        check(head == tag, "工作目錄停在 v0.4.2")
         command = open(os.path.join(ROOT, "更新程式.command"), encoding="utf-8").read()
-        check("git pull" not in command and "git fetch origin --tags" in command and "checkout v0.4.1" in command,
-              "Mac 腳本改為 fetch tags 後 checkout v0.4.1")
+        check("git pull" not in command and "git fetch origin --tags" in command and "checkout v0.4.2" in command,
+              "Mac 腳本改為 fetch tags 後 checkout v0.4.2")
         bat = open(os.path.join(ROOT, "更新程式.bat"), encoding="utf-8").read()
-        check("git pull" not in bat and "git fetch origin --tags" in bat and "checkout v0.4.1" in bat,
-              "Windows 腳本改為 fetch tags 後 checkout v0.4.1")
+        check("git pull" not in bat and "git fetch origin --tags" in bat and "checkout v0.4.2" in bat,
+              "Windows 腳本改為 fetch tags 後 checkout v0.4.2")
+        check("gaitlab-settings-backup.txt" not in bat and "%RANDOM%" in bat,
+              "Windows 備份檔名含 %RANDOM%，不是固定檔名")
+        check("if errorlevel 1 goto :restore_copy_fail" in bat and "請用這個備份手動還原" in bat,
+              "Windows 還原失敗才印備份路徑，成功才說已還原")
+        check('git checkout HEAD -- "設定.txt"' in bat and 'git checkout HEAD -- "設定.txt"' in command,
+              "兩邊都會清掉殘留的刪除狀態")
     finally:
         shutil.rmtree(d)
 
@@ -143,8 +149,28 @@ def test_update_command_keeps_untracked_settings():
         got = open(os.path.join(work, "設定.txt"), encoding="utf-8").read()
         check(got == "USER-UNTRACKED\n", f"未追蹤的本機設定還在（實際 {got!r}）")
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=work, text=True).strip()
-        tag = subprocess.check_output(["git", "rev-parse", "v0.4.1^{}"], cwd=work, text=True).strip()
-        check(head == tag, "工作目錄停在 v0.4.1")
+        tag = subprocess.check_output(["git", "rev-parse", "v0.4.2^{}"], cwd=work, text=True).strip()
+        check(head == tag, "工作目錄停在 v0.4.2")
+    finally:
+        shutil.rmtree(d)
+
+
+def test_deleted_tracked_settings_leaves_clean_tree():
+    print("本機刪掉仍被追蹤的 設定.txt 後，更新完工作樹不再留著刪除狀態")
+    d = tempfile.mkdtemp()
+    try:
+        work, env = _repo_with_tag(d)
+        os.remove(os.path.join(work, "設定.txt"))
+        proc = subprocess.run(["bash", os.path.join(work, "更新程式.command")],
+                               input="x", text=True, capture_output=True, cwd=work, env=env)
+        check(proc.returncode == 0, f"更新腳本結束碼 0（{proc.returncode}）\n{proc.stdout}\n{proc.stderr}")
+        status = subprocess.check_output(["git", "status", "--porcelain"], cwd=work, text=True)
+        check("設定.txt" not in status, f"工作樹沒有留下刪除狀態（實際 {status!r}）")
+        got = open(os.path.join(work, "設定.txt"), encoding="utf-8").read()
+        check(got == "TAG-SETTINGS\n", f"刪掉的追蹤檔回到鎖版內容（實際 {got!r}）")
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=work, text=True).strip()
+        tag = subprocess.check_output(["git", "rev-parse", "v0.4.2^{}"], cwd=work, text=True).strip()
+        check(head == tag, "工作目錄停在 v0.4.2")
     finally:
         shutil.rmtree(d)
 
@@ -154,6 +180,7 @@ def main():
     test_missing_settings_copied_from_example()
     test_update_command_keeps_modified_settings()
     test_update_command_keeps_untracked_settings()
+    test_deleted_tracked_settings_leaves_clean_tree()
     print("鎖版設定檢查通過 ✔")
 
 
