@@ -250,6 +250,7 @@ def run(folder: str | None = None, open_reports: bool = True) -> dict:
     zpath = pack(folder, out, subject)
 
     print("\n" + "=" * 60)
+    print(V.version_line(ver))
     if "front" in done:
         a = done["front"]
         print(f"正面：步寬 {a.get('step_width_mean_cm', float('nan')):.1f} cm｜步速 {a.get('gait_speed_cm_s', float('nan')):.1f} cm/s"

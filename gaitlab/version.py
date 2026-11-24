@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 
-PROGRAM_VERSION = "0.4.0"      # 人工維護的版本號；每次鎖定版本時更新
+PROGRAM_VERSION = "0.4.1"      # 人工維護的版本號；每次鎖定版本時更新
 UNKNOWN = "未取得"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -88,3 +88,11 @@ def version_meta(root: str | None = None) -> dict:
     v = get_version(root)
     return {"commit": v["commit"], "program_version": v["program_version"],
             "commit_worktree_modified": v["worktree_modified"]}
+
+
+def version_line(info: dict | None = None) -> str:
+    """報告與摘要最上方那一行：程式版本與 git commit（取不到就寫「未取得」）。"""
+    v = info if info is not None else get_version()
+    ver = v.get("program_version") or UNKNOWN
+    commit = v.get("commit") or UNKNOWN
+    return f"程式版本 {ver}　|　git commit {commit}"

@@ -243,7 +243,7 @@ python -m gaitlab static S01_static.mov --calib P001_result/calib.json --cam-hei
 **2026-11-23 更新（工單 v3：只改記錄方式與衝突處理，計算公式與係數數值未改）**
 
 - **赤腳旗標**：`結果/使用的設定.txt` 上半寫這次**實際使用**的值（`赤腳 = 是／否`）與依據（`赤腳來源 = 設定檔／資料夾名稱／設定檔與資料夾名稱`），下半以「# 原文｜」附上設定檔原文供追溯。判定規則不變：設定檔寫「是」，或受試者資料夾名稱含「赤腳」／barefoot。`summary.json` 的 `meta.footwear_source` 記同一個依據。
-- **程式版本**：`使用的設定.txt` 有 `程式版本 = <commit 前 7 碼>`；`summary.json`、`side_summary.json` 的 `meta` 有 `commit`（完整 hash）、`program_version`、`commit_worktree_modified`（程式資料夾是否有未提交的修改）。取不到時寫「未取得」——用 Download ZIP 取得的程式資料夾沒有 git 資訊，就會是「未取得」。
+- **程式版本**：`使用的設定.txt` 有 `程式版本 = <commit 前 7 碼>`；`summary.json`、`side_summary.json` 的 `meta` 有 `commit`（完整 hash）、`program_version`、`commit_worktree_modified`（程式資料夾是否有未提交的修改）。取不到時寫「未取得」——用 Download ZIP 取得的程式資料夾沒有 git 資訊，就會是「未取得」。0.4.1 起，HTML 報告最上方第一行，以及這兩個 summary 檔最前面兩個欄位，都會再顯眼標一次（見下方 0.4.1）。
 - **高度修正係數分開記錄**：步長用 `height_correction_factor`（穿鞋 0.975、赤腳 0.983333）；步寬用 `step_width_height_correction_factor`（腳踝點：穿鞋 0.925、赤腳 0.941667）。`meta.height_correction` 列出兩者與對應的關鍵點高度。
 - **側面近側判定衝突**：`near_side`（站立期腳跟高度）與 `near_side_expected`（行走方向推定）不一致時，`near_side_conflict = true`，兩個欄位都保留；該趟膝峰值**不納入**合併平均（`knee_peak_excluded_conflict_trials`、`knee_peak_included_trials` 寫明排除與納入的趟），其餘指標照常納入。兩者會不一致的原因：算法不同——前者只看腳跟一點、取各次站立期的中位數、沒有最小差距門檻；受試者沿走道移動時腳跟在畫面上的高度會漂移，兩腳偵測到的站立期次數又不同時，中位數可能反過來（IMG_1525：整趟三點高度差 8 px 判左腳近，站立期腳跟中位數差 5 px 判右腳近）。
 - 自我檢查：`python tests/test_workorder_v3.py`。
@@ -251,10 +251,19 @@ python -m gaitlab static S01_static.mov --calib P001_result/calib.json --cam-hei
 **遠端標記放大後再偵測（四點都找到時，流程與以前相同）**
 
 - 正面直拍時，遠端標記（ID 2 遠右、ID 3 遠左）在畫面上很扁，大約 85×20 像素。全畫面用預設參數常常只找到近端的 0 和 1。
-- **四個都在全畫面找到時，不做額外搜尋**，校正檔的 `method` 仍是 `aruco`，點的位置仍是每一點第一次被看到的位置。
-- 缺 2 或 3 時，先用近端標記的位置推出遠端該在的一塊範圍（沒有近端就用畫面中央偏上的預設帶），把該範圍以 INTER_CUBIC 放大 2、3、4 倍，字典與 DetectorParameters 都與全畫面相同，再偵一次。只接受 ID 0–3。每個缺的 ID 湊滿 15 次偵測就停，否則從第 0 格掃到第 239 格、每隔一格。中心是四個角的平均，各次偵測再取中位數。放大後仍缺的標記才請使用者點選。
-- 校正檔 `method`：四點來源相同時寫一個詞（`aruco`、`click`、`points`）；來源不同就逐點寫，例如 `0:aruco(n=2,sd=0.10/0.20);2:aruco_roi_upscale(n=15,sd=0.35/0.12);3:click(n=1)`。不再把「有自動、也有點選」整組標成 `aruco+click`。`marker_detection` 另以數字記下每個點的來源、次數與標準差。
+- **四個都在全畫面找到時，不做額外搜尋**，校正檔的 `method` 仍是 `aruco`。近端 ID 0、1 的位置是取樣窗內各次偵測的中位數；遠端 ID 2、3 若已在全畫面找到，位置仍是第一次看到的那個。
+- 缺 2 或 3 時，先用近端標記的位置推出遠端該在的一塊範圍（沒有近端就用畫面中央偏上的預設帶），把該範圍以 INTER_CUBIC 放大 2、3、4 倍，字典與 DetectorParameters 都與全畫面相同，再偵一次。只接受 ID 0–3。取樣是前 240 格、每隔一格（最多 120 張），這個範圍全部取完，不再湊滿 15 次就停。中心是四個角的平均，各次偵測再取中位數。放大後仍缺的標記才請使用者點選。
+- 校正檔 `method`：四點來源相同時寫一個詞（`aruco`、`click`、`points`）；來源不同就逐點寫，例如 `0:aruco(n=2,sd=0.10/0.20);2:aruco_roi_upscale(n=15,sd=0.35/0.12);3:click(n=1)`。不再把「有自動、也有點選」整組標成 `aruco+click`。`marker_detection` 另以數字記下每個點的來源、次數與標準差。沿用前一支影片沒找到的點時，讀這份紀錄，保留該點原本的 `aruco`／`aruco_roi_upscale`／`click`。
 - 自我檢查（不需要影片）：`python tests/test_far_marker_roi.py`。
+
+**2026-11-24 更新（0.4.1，鎖版前小修）**
+
+1. **報告第一行**：正面、側面，以及「無法分析」的 HTML，`<body>` 的第一行用深藍底白字顯示 `program_version` 與完整 git commit。`summary.json`、`side_summary.json` 最前面兩個欄位同樣是 `program_version`、`commit`（`meta` 裡仍保留）。一鍵分析結束時的摘要，第一行也是這一行。取不到 commit 時寫「未取得」。
+2. **近端標記取中位數**：ArUco ID 0、1 的角點中心改為取樣窗（前 2 秒、大約每秒 4 格，整段都取）內多格偵測的中位數，不再只用第 0 格。遠端 ID 2、3 若在全畫面就找到，位置仍是第一次看到的那個。
+3. **不再提早停止**：拿掉「每個 ID 滿 15 次偵測就停」。遠端放大在既定範圍內全部取樣：前 240 格、每隔一格，最多 120 張。這是固定上限。4K 直拍上，搜尋帶放大 2／3／4 倍，一格大約 0.1–0.4 秒，120 格大約十幾秒到一分鐘，所以不把整支影片掃完。全畫面取樣也不再在四點都出現一次時停。
+4. **重算時保留各點 method**：程式庫沒有獨立的 recalc.py；會把 `method` 寫進校正檔的是校正流程。沿用前一支影片、重寫校正檔時，改讀 `marker_detection`，保留每個點實際的 `aruco`／`aruco_roi_upscale`／`click`，不再寫成 `aruco+click`，也不再把這些點一律改標成 `reused_previous`。舊檔若沒有 `marker_detection`，無法還原哪一點是點選的，缺的點仍標 `reused_previous`。
+
+第 2、3 項會讓校正點的像素座標和 0.4.0 差在次像素到數像素，步寬、步長可能跟著變。請用真實影片在本機複驗後再鎖版。自我檢查（合成畫面，不含受試者影片）：`python tests/test_v041.py`，並重跑 `python tests/test_far_marker_roi.py`、`python tests/test_workorder_v3.py`、`python tests/check_install.py`。
 
 **驗證狀態總表（2026-11-13，12/10 交接前不借壓力步道）**
 

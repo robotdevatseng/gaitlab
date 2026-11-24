@@ -17,6 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from . import pose as P  # noqa: E402
+from . import version as V  # noqa: E402
 from .calib import to_image  # noqa: E402
 
 plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "PingFang TC", "Heiti TC", "Noto Sans CJK TC",
@@ -24,6 +25,12 @@ plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "PingFang TC", "Heiti T
 plt.rcParams["axes.unicode_minus"] = False
 
 C_L, C_R = "#2a6fdb", "#e8743b"   # 左腳藍、右腳橘
+# 報告最上方第一行：白字深藍，比頁首其他說明醒目。
+_VER_CSS = ".ver{{background:#143d66;color:#fff;font-size:18px;font-weight:700;line-height:1.4;padding:10px 14px;margin:0 0 14px;border-radius:4px}}"
+
+
+def version_banner(meta) -> str:
+    return f'<div class="ver">{html.escape(V.version_line(meta))}</div>'
 
 METRICS = [
     # key, 中文, 單位, 小數位, 說明
@@ -231,11 +238,24 @@ def side_null_reasons(s: dict) -> dict:
     return why
 
 
+def write_json(path, meta, payload: dict) -> None:
+    """summary 檔最前面兩個欄位是 program_version 與 commit，接著才是原本的內容。"""
+    doc = {
+        "program_version": meta.get("program_version") or "未取得",
+        "commit": meta.get("commit") or "未取得",
+    }
+    doc.update(payload)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2, ensure_ascii=False)
+
+
 def write_blocked_html(path, meta, title):
     items = "".join(f"<li><b>{html.escape(k)}</b>：{html.escape(str(v))}</li>" for k, v in (meta.get("not_analyzed") or {}).items())
     doc = f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>{title}：無法分析</title>
 <style>body{{font-family:"Noto Sans TC","Microsoft JhengHei","PingFang TC",sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#222}}
+{_VER_CSS}
 .flags{{background:#fdecea;border-left:4px solid #c0392b;padding:10px 14px;margin:12px 0;line-height:1.7}}</style></head><body>
+{version_banner(meta)}
 <h1>{title}：沒有產生結果</h1>
 <div>受試者：{html.escape(meta.get('subject') or '—')}　|　{meta.get('created','')}</div>
 <div class="flags"><b>所有影片都沒有分析，原因如下（沒有任何數值被計算或填補）：</b><ul>{items}</ul></div>
@@ -246,11 +266,13 @@ def write_blocked_html(path, meta, title):
 
 def write_summary_json(path, meta, agg, results):
     clean = clean_nan
-    out = {"meta": clean(meta), "overall": clean(agg), "overall_null_reasons": front_null_reasons(agg) if results else
-           {k: "沒有可分析的影片（原因見 meta.not_analyzed）" for k, v in agg.items() if v is None},
-           "trials": {name: {**clean(res.summary), "null_reasons": front_null_reasons(res.summary)} for name, res in results}}
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2, ensure_ascii=False)
+    write_json(path, meta, {
+        "meta": clean(meta),
+        "overall": clean(agg),
+        "overall_null_reasons": front_null_reasons(agg) if results else
+        {k: "沒有可分析的影片（原因見 meta.not_analyzed）" for k, v in agg.items() if v is None},
+        "trials": {name: {**clean(res.summary), "null_reasons": front_null_reasons(res.summary)} for name, res in results},
+    })
 
 
 def quality_flags(agg, results, meta=None) -> list[str]:
@@ -357,11 +379,13 @@ td.note{{text-align:left;color:#666;font-size:12px}} img{{max-width:100%;display
 .flags{{background:#fff4e5;border-left:4px solid #e8743b;padding:8px 12px;margin:12px 0}}
 .ok{{background:#eef7ee;border-left:4px solid #3a9d4a;padding:8px 12px;margin:12px 0}}
 .disc{{color:#888;font-size:12px;margin-top:32px}}
+{_VER_CSS}
 </style></head><body>
+{version_banner(meta)}
 <h1>步態分析報告（研究原型）</h1>
 <div class="meta">受試者：{html.escape(meta.get('subject','—'))}　|　分析時間：{meta['created']}　|　趟數：{len(results)}　|
 地板量測區：{floor_w:g} m × {floor_l:g} m　|　鏡頭高度設定：{meta.get('cam_height_m')} m{_geo_txt(meta)}　|　步寬左右位置：{'腳踝點' if meta.get('lateral_point') == 'ankle' else '腳跟點'}　|　{meta.get('footwear', '穿鞋')}{_fw_src(meta)}</div>
-<div class="meta">{_hc_txt(meta)}　|　程式版本：{meta.get('program_version', '—')}（commit {str(meta.get('commit', '未取得'))[:7]}）</div>
+<div class="meta">{_hc_txt(meta)}</div>
 {flag_html}
 <h2>主要指標</h2>
 <table><tr><th style="text-align:left">指標</th><th>合併</th><th></th>{per_head}<th style="text-align:left">說明</th></tr>{rows}</table>
@@ -525,7 +549,6 @@ def write_side_html(path, meta, agg, results):
         knee_note = ("<div class='meta'>膝峰值合併平均納入的趟：左膝 " + html.escape("、".join(inc.get("L") or []) or "無")
                      + "；右膝 " + html.escape("、".join(inc.get("R") or []) or "無") + "。"
                      + (html.escape(agg.get("knee_peak_note") or "") + "。" if agg.get("knee_peak_note") else "") + "</div>")
-    ver = f"程式版本：{meta.get('program_version', '—')}（commit {str(meta.get('commit', '未取得'))[:7]}）"
     doc = f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>側面步態報告 {html.escape(meta.get('subject',''))}</title>
 <style>
@@ -538,9 +561,11 @@ td.note{{text-align:left;color:#666;font-size:12px}} img{{max-width:100%;display
 .flags{{background:#fff4e5;border-left:4px solid #e8743b;padding:8px 12px;margin:12px 0}}
 .ok{{background:#eef7ee;border-left:4px solid #3a9d4a;padding:8px 12px;margin:12px 0}}
 .disc{{color:#888;font-size:12px;margin-top:32px}}
+{_VER_CSS}
 </style></head><body>
+{version_banner(meta)}
 <h1>側面步態報告（研究原型）</h1>
-<div class="meta">受試者：{html.escape(meta.get('subject','—'))}　|　分析時間：{meta['created']}　|　趟數：{len(results)}　|　側面標記間距（實際使用值）：{meta.get('gap_m')} m　|　{html.escape(ver)}</div>
+<div class="meta">受試者：{html.escape(meta.get('subject','—'))}　|　分析時間：{meta['created']}　|　趟數：{len(results)}　|　側面標記間距（實際使用值）：{meta.get('gap_m')} m</div>
 <div class="meta" style="margin-top:4px">{html.escape(meta.get('gap_note',''))}</div>
 {flag_html}
 <h2>主要指標</h2>

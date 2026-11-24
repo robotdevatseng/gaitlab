@@ -45,14 +45,18 @@ def _iter_frames(video: str, end: int, step: int):
 
 
 def _record_from_samples(samples: dict) -> dict:
-    """全畫面偵測：位置用第一次看到的（與舊版 setdefault 相同），次數與 SD 用這一段裡的全部樣本。"""
+    """全畫面偵測。近端 ID 0、1 的中心取多格偵測的中位數（與遠端放大相同），不用第 0 格。
+
+    遠端 ID 2、3 若已在全畫面找到，位置仍用第一次看到的那個。次數與標準差都用全部樣本。
+    """
     records = {}
     for k, pts in samples.items():
         if not pts:
             continue
-        stacked = np.stack(pts, 0)
-        records[k] = {"method": "aruco", "center": np.asarray(pts[0], float),
-                      "n": int(len(pts)), "sd": stacked.std(0)}
+        stacked = np.stack([np.asarray(p, float) for p in pts], 0)
+        center = np.median(stacked, 0) if int(k) in (0, 1) else stacked[0]
+        records[k] = {"method": "aruco", "center": np.asarray(center, float),
+                      "n": int(stacked.shape[0]), "sd": stacked.std(0)}
     return records
 
 
@@ -61,8 +65,9 @@ def do_calibrate(video: str, floor, method: str, points: str | None, out: str, p
     只有在解析度相同、且這支影片自動辨識到的標記位置與 prev 相差 < 3 像素（鏡頭確實沒動）時，
     才沿用 prev 中沒辨識到的那幾個點；否則請使用者重新點選。
 
-    全畫面已找到四個標記時，不做遠端放大（method 維持 aruco）。缺 ID 2 或 3 時，
-    先在由近端位置推出的範圍裡放大再偵一次，仍缺的才點選。method 逐點記錄來源。
+    全畫面已找到四個標記時，不做遠端放大（method 維持 aruco）。近端 0、1 的中心是
+    取樣窗內多格偵測的中位數；遠端若在全畫面找到，位置仍用第一次。缺 ID 2 或 3 時，
+    在固定格數內放大再偵，仍缺的才點選。沿用前一支沒找到的點時，保留該點原本的 method。
     """
     w, l = floor
     frame = P.read_frame(video, 0)
@@ -79,22 +84,24 @@ def do_calibrate(video: str, floor, method: str, points: str | None, out: str, p
     else:
         records = {}
         if method in ("auto", "aruco"):
-            # 前 2 秒內多取幾格。四點都找到就停，位置仍用每一點第一次出現的那次。
+            # 前 2 秒、大約每秒 4 格，整段都取，不在四點都出現一次時停。
+            # 近端 0、1 的中心用這些格子的中位數。
             info = P.video_info(video)
             samples = {k: [] for k in range(4)}
-            for i in range(0, min(info["n_frames"], int(info["fps"] * 2)), max(1, int(info["fps"] // 4))):
+            end = min(info["n_frames"], int(info["fps"] * 2))
+            step = max(1, int(info["fps"] // 4))
+            for i in range(0, end, step):
                 for k, v in C.detect_aruco_ids(P.read_frame(video, i)).items():
                     samples[k].append(np.asarray(v, float))
-                if all(samples[k] for k in range(4)):
-                    break
             records = _record_from_samples(samples)
             missing_far = [k for k in C.FAR_MARKER_IDS if k not in records]
             if missing_far:
                 # 全畫面常常只剩近端。遠端很扁，先放大再偵，還沒有才交給點選。
+                # 上限是前 240 格、每隔一格，這個範圍裡的格子全部取，不在滿 15 次時停。
                 print(f"全畫面未找到標記 {'、'.join(names[k] for k in missing_far)}，改在遠端範圍放大 2／3／4 倍再偵測…")
                 near = {k: records[k]["center"] for k in (0, 1) if k in records}
                 roi_found = C.search_far_markers(
-                    _iter_frames(video, end=min(int(info["n_frames"]), 240), step=2),
+                    _iter_frames(video, end=min(int(info["n_frames"]), C.FAR_SAMPLE_END), step=C.FAR_SAMPLE_STEP),
                     near, wanted=missing_far, frame_shape=frame.shape)
                 for k, rec in roi_found.items():
                     if k not in records:
@@ -112,9 +119,15 @@ def do_calibrate(video: str, floor, method: str, points: str | None, out: str, p
             pp = np.asarray(prev["image_points_px"], float)
             dev = max(float(np.hypot(*(np.asarray(records[k]["center"]) - pp[k]))) for k in records)
             if dev < 3.0:
+                saved = C.records_from_saved_detection(prev)
                 for k in range(4):
                     if k not in records:
-                        records[k] = {"method": "reused_previous", "center": pp[k], "n": 1, "sd": None}
+                        if saved and k in saved:
+                            rec = dict(saved[k])
+                            rec["center"] = np.asarray(pp[k], float)
+                            records[k] = rec
+                        else:
+                            records[k] = {"method": "reused_previous", "center": pp[k], "n": 1, "sd": None}
                 note = f"鏡頭未移動，標記位置相差 {dev:.1f} 像素"
             else:
                 print(f"這支影片的標記位置與前一支相差 {dev:.0f} 像素（鏡頭或畫面有變動），需要重新點選。")
@@ -236,20 +249,21 @@ def run_side(args):
             "not_analyzed": skipped}
     clean = R.clean_nan
     if not results:
-        with open(os.path.join(args.out, "side_summary.json"), "w", encoding="utf-8") as f:
-            json.dump({"meta": meta, "overall": None, "overall_null_reason": "沒有可分析的側面影片（原因見 meta.not_analyzed）",
-                       "trials": {}}, f, ensure_ascii=False, indent=2)
+        R.write_json(os.path.join(args.out, "side_summary.json"), meta,
+                     {"meta": meta, "overall": None, "overall_null_reason": "沒有可分析的側面影片（原因見 meta.not_analyzed）",
+                      "trials": {}})
         R.write_blocked_html(os.path.join(args.out, "side_report.html"), meta, "側面步態分析")
+        print(V.version_line(meta))
         sys.exit("沒有可分析的側面影片：" + "；".join(f"{k}：{v}" for k, v in skipped.items()))
     agg = S.aggregate_side([r for _, r in results], [n for n, _ in results])
     for n, r in results:
         if r.summary.get("near_side_conflict"):
             print(f"[{n}] ⚠ {r.summary['near_side_conflict_note']}")
     R.write_side_html(os.path.join(args.out, "side_report.html"), meta, agg, results)
-    with open(os.path.join(args.out, "side_summary.json"), "w", encoding="utf-8") as f:
-        json.dump({"meta": meta, "overall": clean(agg), "overall_null_reasons": R.side_null_reasons(agg),
-                   "trials": {n: {**clean(r.summary), "null_reasons": R.side_null_reasons(r.summary)} for n, r in results}},
-                  f, ensure_ascii=False, indent=2)
+    R.write_json(os.path.join(args.out, "side_summary.json"), meta,
+                 {"meta": meta, "overall": clean(agg), "overall_null_reasons": R.side_null_reasons(agg),
+                  "trials": {n: {**clean(r.summary), "null_reasons": R.side_null_reasons(r.summary)} for n, r in results}})
+    print(V.version_line(meta))
     print(f"完成。報告：{os.path.join(args.out, 'side_report.html')}")
     return agg
 
@@ -473,12 +487,14 @@ def run_analyze(args):
         agg["n_trials"] = 0
         R.write_summary_json(os.path.join(args.out, "summary.json"), meta, agg, [])
         R.write_blocked_html(os.path.join(args.out, "report.html"), meta, "正面步態分析")
+        print(V.version_line(meta))
         print("沒有可分析的正面影片；原因已寫入 summary.json 與 report.html。")
         return agg, geo0
     agg = G.aggregate([r for _, r in results])
     R.write_steps_csv(os.path.join(args.out, "steps.csv"), results)
     R.write_summary_json(os.path.join(args.out, "summary.json"), meta, agg, results)
     R.write_html(os.path.join(args.out, "report.html"), meta, agg, results, w, l)
+    print(V.version_line(meta))
     print(f"完成。報告：{os.path.join(args.out, 'report.html')}")
     return agg, geo0
 
