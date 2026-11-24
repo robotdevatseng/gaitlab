@@ -15,6 +15,13 @@ ARUCO_DICT = cv2.aruco.DICT_4X4_50
 FLOOR_MARKER_IDS = (0, 1, 2, 3)
 FAR_MARKER_IDS = (2, 3)
 ROI_UPSCALE_SCALES = (2, 3, 4)
+# 遠端放大的固定取樣上限：前 240 格、每隔一格（最多 120 張）。
+# 不再在每個 ID 湊滿 15 次時停。4K 直拍上，搜尋帶放大 2／3／4 倍一格大約 0.1–0.4 秒，
+# 120 格大約十幾秒到一分鐘，所以用這個上限，不把整支影片掃完。
+FAR_SAMPLE_END = 240
+FAR_SAMPLE_STEP = 2
+# 校正檔裡每個角點實際的來源。重算、沿用前一支時只接受這些，不寫成 aruco+click。
+POINT_METHODS = ("aruco", "aruco_roi_upscale", "click", "points", "reused_previous")
 # 遠端搜尋帶：從近端標記那一列，沿「遠離鏡頭」的方向量畫面高度的比例。
 # 正面直拍、近端靠近畫面下緣時，5 m 量測區的遠端大約落在 0.25–0.40
 # （實測 IMG_1554 約 0.27；合成的強透視約 0.37）。0.08–0.48 兩者都包得住，又不會蓋到近端標記。
@@ -220,14 +227,14 @@ def detect_roi_upscale(frame: np.ndarray, roi, *,
 def search_far_markers(frames, near_centers=None, *,
                        wanted=FAR_MARKER_IDS,
                        scales=ROI_UPSCALE_SCALES,
-                       min_keep: int = 15,
                        frame_shape=None,
                        roi=None) -> dict[int, dict]:
     """遠端標記後備搜尋。frames 是 BGR 影格（可為產生器）。
 
     範圍用 far_marker_roi 從近端位置推出來（roi 有給就用給的）。
-    每個想找的 ID 湊滿 min_keep 次就停；否則把傳進來的影格掃完。
-    中心取所有偵測（每格、每種倍率各算一次）的中位數，與全畫面偵測同一種定義。
+    傳進來的影格全部掃完，不在某個 ID 湊滿幾次時提早停。格數上限由呼叫端決定
+    （正面校正是前 FAR_SAMPLE_END 格、每隔 FAR_SAMPLE_STEP 格）。
+    中心取所有偵測（每格、每種倍率各算一次）的中位數。
     """
     wanted = tuple(int(i) for i in wanted if int(i) in FLOOR_MARKER_IDS)
     buckets: dict[int, list] = {i: [] for i in wanted}
@@ -237,8 +244,6 @@ def search_far_markers(frames, near_centers=None, *,
             used_roi = far_marker_roi(frame_shape if frame_shape is not None else frame.shape, near_centers)
         for i, centers in detect_roi_upscale(frame, used_roi, ids=wanted, scales=scales).items():
             buckets[i].extend(centers)
-        if min_keep is not None and wanted and all(len(buckets[i]) >= min_keep for i in wanted):
-            break
     out = {}
     for i, centers in buckets.items():
         if not centers:
@@ -253,6 +258,50 @@ def search_far_markers(frames, near_centers=None, *,
             "scales": [int(s) for s in scales],
         }
     return out
+
+
+def source_method_text(record: dict) -> str:
+    """沿用前記下原本的方法，例如 aruco_roi_upscale(n=36)。沒有次數就只寫方法名稱。"""
+    method = str(record.get("method") or "")
+    n = record.get("n")
+    if n is None:
+        return method
+    return f"{method}(n={int(n)})"
+
+
+def records_from_saved_detection(calib: dict) -> dict | None:
+    """從校正檔的 marker_detection 讀回每個點的 method、次數與標準差。
+
+    沿用前一支時用這份紀錄填 source_method；寫回校正檔的 method 仍是 reused_previous。
+    四個點不齊，或某個點的 method 不是已知來源時，回傳 None。
+    """
+    det = calib.get("marker_detection")
+    if not isinstance(det, dict):
+        return None
+    records = {}
+    points = calib.get("image_points_px")
+    for k in range(4):
+        src = det.get(str(k))
+        if not isinstance(src, dict):
+            return None
+        method = src.get("method")
+        if method not in POINT_METHODS:
+            return None
+        center = src.get("center_px")
+        if center is None:
+            if not points or len(points) != 4:
+                return None
+            center = points[k]
+        sd = src.get("sd_px")
+        records[k] = {
+            "method": method,
+            "center": np.asarray(center, float),
+            "n": None if src.get("n") is None else int(src["n"]),
+            "sd": None if sd is None else np.asarray(sd, float),
+        }
+        if "source_method" in src:
+            records[k]["source_method"] = src.get("source_method")
+    return records
 
 
 def format_calib_method(records: dict, note: str | None = None) -> str:
@@ -296,6 +345,8 @@ def marker_detection_json(records: dict) -> dict:
             "sd_px": None if sd is None else [float(sd[0]), float(sd[1])],
             "center_px": [float(r["center"][0]), float(r["center"][1])],
         }
+        if "source_method" in r:
+            item["source_method"] = r.get("source_method")
         if r.get("roi_px") is not None:
             item["roi_px"] = [int(v) for v in r["roi_px"]]
         if r.get("scales") is not None:
