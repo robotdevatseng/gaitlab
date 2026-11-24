@@ -5,12 +5,13 @@
   B. 全放一起：檔名有 side 或「側」的當側面，其餘當正面
 （另有 站立/ 子資料夾或檔名含 static、「站立」→ 靜態站立測試，平常不需要）
 
-設定（量測區大小、鏡頭高度、側面標記距離）寫在程式資料夾的「設定.txt」，第一次執行會自動產生。
+設定（量測區大小、鏡頭高度、側面標記距離）寫在程式資料夾的「設定.txt」。沒有這個檔時，第一次執行會從「設定.範例.txt」複製一份。
 結果放在 S02/結果/；要寄的檔案自動打包成 S02/寄給研究者_S02.zip（不含影片，只有幾 MB）。
 """
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import traceback
 import webbrowser
@@ -19,6 +20,7 @@ from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS_FILE = os.path.join(ROOT, "設定.txt")
+EXAMPLE_FILE = os.path.join(ROOT, "設定.範例.txt")
 VIDEO_EXT = (".mov", ".mp4", ".m4v", ".avi")
 DEFAULTS = [
     ("量測區寬度", 1.0, "地板四張標記（0–3 號）左右中心距離，公尺"),
@@ -30,13 +32,24 @@ DEFAULTS = [
 YES, NO = ("是", "yes", "y", "true", "1", "赤腳"), ("否", "no", "n", "false", "0", "穿鞋")
 
 
-def load_settings() -> dict:
-    if not os.path.exists(SETTINGS_FILE):
+def ensure_settings_file() -> None:
+    """沒有 設定.txt 時，從 設定.範例.txt 複製一份。範例也不在時，改用內建預設寫出。"""
+    if os.path.exists(SETTINGS_FILE):
+        return
+    if os.path.exists(EXAMPLE_FILE):
+        shutil.copyfile(EXAMPLE_FILE, SETTINGS_FILE)
+        note = "由設定.範例.txt 複製"
+    else:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             f.write("# 一鍵分析的設定。只改等號右邊，存檔即可。\n")
             for k, v, note in DEFAULTS:
                 f.write(f"# {note}\n{k} = {v}\n")
-        print(f"已建立設定檔：{SETTINGS_FILE}（請確認數字跟現場佈置一樣）")
+        note = "範例不在，已用內建預設寫出"
+    print(f"已建立設定檔：{SETTINGS_FILE}（{note}；請確認數字跟現場佈置一樣）")
+
+
+def load_settings() -> dict:
+    ensure_settings_file()
     vals = {k: v for k, v, _ in DEFAULTS}
     try:
         with open(SETTINGS_FILE, encoding="utf-8-sig") as f:
