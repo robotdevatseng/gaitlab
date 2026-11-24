@@ -260,11 +260,20 @@ def search_far_markers(frames, near_centers=None, *,
     return out
 
 
+def source_method_text(record: dict) -> str:
+    """沿用前記下原本的方法，例如 aruco_roi_upscale(n=36)。沒有次數就只寫方法名稱。"""
+    method = str(record.get("method") or "")
+    n = record.get("n")
+    if n is None:
+        return method
+    return f"{method}(n={int(n)})"
+
+
 def records_from_saved_detection(calib: dict) -> dict | None:
     """從校正檔的 marker_detection 讀回每個點的 method、次數與標準差。
 
-    重算或沿用前一支影片時用這份紀錄，保留 aruco／aruco_roi_upscale／click，
-    不要把 method 改寫成 aruco+click。四個點不齊，或某個點的 method 不是已知來源時，回傳 None。
+    沿用前一支時用這份紀錄填 source_method；寫回校正檔的 method 仍是 reused_previous。
+    四個點不齊，或某個點的 method 不是已知來源時，回傳 None。
     """
     det = calib.get("marker_detection")
     if not isinstance(det, dict):
@@ -290,6 +299,8 @@ def records_from_saved_detection(calib: dict) -> dict | None:
             "n": None if src.get("n") is None else int(src["n"]),
             "sd": None if sd is None else np.asarray(sd, float),
         }
+        if "source_method" in src:
+            records[k]["source_method"] = src.get("source_method")
     return records
 
 
@@ -334,6 +345,8 @@ def marker_detection_json(records: dict) -> dict:
             "sd_px": None if sd is None else [float(sd[0]), float(sd[1])],
             "center_px": [float(r["center"][0]), float(r["center"][1])],
         }
+        if "source_method" in r:
+            item["source_method"] = r.get("source_method")
         if r.get("roi_px") is not None:
             item["roi_px"] = [int(v) for v in r["roi_px"]]
         if r.get("scales") is not None:

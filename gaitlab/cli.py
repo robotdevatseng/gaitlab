@@ -67,7 +67,8 @@ def do_calibrate(video: str, floor, method: str, points: str | None, out: str, p
 
     全畫面已找到四個標記時，不做遠端放大（method 維持 aruco）。近端 0、1 的中心是
     取樣窗內多格偵測的中位數；遠端若在全畫面找到，位置仍用第一次。缺 ID 2 或 3 時，
-    在固定格數內放大再偵，仍缺的才點選。沿用前一支沒找到的點時，保留該點原本的 method。
+    在固定格數內放大再偵，仍缺的才點選。沿用前一支沒找到的點時，method 寫 reused_previous，
+    原本的方法另外放在 source_method（沒有逐點紀錄就是 null）。
     """
     w, l = floor
     frame = P.read_frame(video, 0)
@@ -122,12 +123,15 @@ def do_calibrate(video: str, floor, method: str, points: str | None, out: str, p
                 saved = C.records_from_saved_detection(prev)
                 for k in range(4):
                     if k not in records:
-                        if saved and k in saved:
-                            rec = dict(saved[k])
-                            rec["center"] = np.asarray(pp[k], float)
-                            records[k] = rec
+                        src = saved.get(k) if saved else None
+                        if src and src.get("method") == "reused_previous":
+                            source = src.get("source_method")
+                        elif src:
+                            source = C.source_method_text(src)
                         else:
-                            records[k] = {"method": "reused_previous", "center": pp[k], "n": 1, "sd": None}
+                            source = None
+                        records[k] = {"method": "reused_previous", "source_method": source,
+                                      "center": np.asarray(pp[k], float), "n": 1, "sd": None}
                 note = f"鏡頭未移動，標記位置相差 {dev:.1f} 像素"
             else:
                 print(f"這支影片的標記位置與前一支相差 {dev:.0f} 像素（鏡頭或畫面有變動），需要重新點選。")

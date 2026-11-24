@@ -25,8 +25,8 @@ plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "PingFang TC", "Heiti T
 plt.rcParams["axes.unicode_minus"] = False
 
 C_L, C_R = "#2a6fdb", "#e8743b"   # 左腳藍、右腳橘
-# 報告最上方第一行：白字深藍，比頁首其他說明醒目。
-_VER_CSS = ".ver{{background:#143d66;color:#fff;font-size:18px;font-weight:700;line-height:1.4;padding:10px 14px;margin:0 0 14px;border-radius:4px}}"
+# 這段是普通字串，稍後整段插進 f-string。大括號只寫一層；寫成 {{ }} 會原樣進 HTML，樣式就不會生效。
+_VER_CSS = ".ver{background:#143d66;color:#fff;font-size:18px;font-weight:700;line-height:1.4;padding:10px 14px;margin:0 0 14px;border-radius:4px}"
 
 
 def version_banner(meta) -> str:

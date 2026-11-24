@@ -31,6 +31,11 @@ def check(cond, msg):
         raise SystemExit(f"失敗：{msg}")
 
 
+def _check_ver_css(html_text, name):
+    check("{{" not in html_text, f"{name} 的 HTML 不含 {{{{")
+    check(".ver{background:#143d66" in html_text, f"{name} 的版本列樣式是深藍底")
+
+
 def _paste(img, marker, x, y):
     h, w = marker.shape
     img[y:y + h, x:x + w] = marker
@@ -57,9 +62,11 @@ def test_reports_lead_with_version():
     try:
         blocked = os.path.join(d, "blocked.html")
         R.write_blocked_html(blocked, {**meta, "not_analyzed": {"T": "沒有影片"}}, "正面步態分析")
-        body = open(blocked, encoding="utf-8").read().split("<body>", 1)[1].lstrip()
+        blocked_html = open(blocked, encoding="utf-8").read()
+        body = blocked_html.split("<body>", 1)[1].lstrip()
         check(body.startswith('<div class="ver">'), "無法分析的報告，body 第一行是版本列")
         check(body.find(line) < body.find("受試者"), "版本列在受試者之前")
+        _check_ver_css(blocked_html, "無法分析的報告")
 
         lm, H, _truth = simulate(seed=1)
         res = G.analyze(lm, H, 1.0, 5.0)
@@ -76,10 +83,12 @@ def test_reports_lead_with_version():
 
         report = os.path.join(d, "report.html")
         R.write_html(report, meta, agg, [("t1", res)], 1.0, 5.0)
-        body = open(report, encoding="utf-8").read().split("<body>", 1)[1].lstrip()
+        report_html = open(report, encoding="utf-8").read()
+        body = report_html.split("<body>", 1)[1].lstrip()
         check(body.startswith('<div class="ver">'), "正面報告 body 第一行是版本列")
         check(body.find("git commit") < body.find("受試者"), "正面報告的版本在受試者那一行之前")
         check("程式版本：" not in body, "版本不再放在頁首次行")
+        _check_ver_css(report_html, "正面報告")
 
         summ = {"n_strides": 4, "near_side": "L", "near_side_conflict": False, "near_side_expected": "L",
                 "lr": {"walking_direction_image": "往右", "frames_total": 10, "frames_discarded": 0,
@@ -94,9 +103,11 @@ def test_reports_lead_with_version():
             R.write_side_html(side_html, meta, side_agg, [("s1", side_res)])
         finally:
             R.fig_side = orig
-        body = open(side_html, encoding="utf-8").read().split("<body>", 1)[1].lstrip()
+        side_text = open(side_html, encoding="utf-8").read()
+        body = side_text.split("<body>", 1)[1].lstrip()
         check(body.startswith('<div class="ver">') and body.find("git commit") < body.find("受試者"),
               "側面報告 body 第一行是版本列")
+        _check_ver_css(side_text, "側面報告")
         side_json = os.path.join(d, "side_summary.json")
         R.write_json(side_json, meta, {"meta": meta, "overall": side_agg, "trials": {}})
         side_raw = json.load(open(side_json, encoding="utf-8"))
@@ -192,7 +203,7 @@ def test_far_search_scans_whole_window():
 
 
 def test_recalc_keeps_point_methods():
-    print("重算／沿用校正時保留每個點的 method，不寫成 aruco+click")
+    print("沿用前一支時 method 是 reused_previous，source_method 記下原本的方法")
     calib = {
         "method": "aruco+click",
         "image_points_px": [[0, 0], [1, 1], [2, 2], [3, 3]],
@@ -226,9 +237,14 @@ def test_recalc_keeps_point_methods():
         "marker_detection": {
             "0": {"method": "aruco", "n": 2, "sd_px": [0.1, 0.2], "center_px": found[0].tolist()},
             "1": {"method": "aruco", "n": 2, "sd_px": [0.0, 0.1], "center_px": found[1].tolist()},
-            "2": {"method": "aruco_roi_upscale", "n": 6, "sd_px": [0.3, 0.4], "center_px": [12.0, 34.0]},
+            "2": {"method": "aruco_roi_upscale", "n": 36, "sd_px": [0.3, 0.4], "center_px": [12.0, 34.0]},
             "3": {"method": "click", "n": 1, "sd_px": None, "center_px": [56.0, 78.0]},
         },
+    }
+    legacy = {
+        "image_size_px": [w, h],
+        "image_points_px": [found[0].tolist(), found[1].tolist(), [12.0, 34.0], [56.0, 78.0]],
+        "method": "aruco+click",
     }
     orig = (P.read_frame, P.video_info, P.open_video, C.click_points)
 
@@ -258,23 +274,39 @@ def test_recalc_keeps_point_methods():
         raise AssertionError("前一支已有遠端的點，不該打開點選視窗")
 
     P.read_frame, P.video_info, P.open_video, C.click_points = read_frame, video_info, open_video, no_click
-    fd, path = tempfile.mkstemp(suffix="_calib.json")
-    os.close(fd)
+
+    def _run(previous):
+        fd, path = tempfile.mkstemp(suffix="_calib.json")
+        os.close(fd)
+        try:
+            CLI.do_calibrate("synthetic.mov", (1.0, 5.0), "auto", None, path, previous)
+            return json.load(open(path, encoding="utf-8"))
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
     try:
-        CLI.do_calibrate("synthetic.mov", (1.0, 5.0), "auto", None, path, prev)
-        raw = json.load(open(path, encoding="utf-8"))
+        raw = _run(prev)
+        legacy_raw = _run(legacy)
     finally:
         P.read_frame, P.video_info, P.open_video, C.click_points = orig
-        if os.path.exists(path):
-            os.remove(path)
     det = raw["marker_detection"]
-    check(det["2"]["method"] == "aruco_roi_upscale", f"沿用的 ID 2 仍是 aruco_roi_upscale（實際 {det['2']['method']}）")
-    check(det["3"]["method"] == "click", f"沿用的 ID 3 仍是 click（實際 {det['3']['method']}）")
+    check(det["2"]["method"] == "reused_previous" and det["3"]["method"] == "reused_previous",
+          "沿用的點，method 維持 reused_previous")
+    check(det["2"]["source_method"] == "aruco_roi_upscale(n=36)",
+          f"ID 2 的 source_method 是原本的方法（實際 {det['2'].get('source_method')}）")
+    check(det["3"]["source_method"] == "click(n=1)",
+          f"ID 3 的 source_method 是 click(n=1)（實際 {det['3'].get('source_method')}）")
     check(det["0"]["method"] == "aruco" and det["1"]["method"] == "aruco", "這一支新找到的近端仍是 aruco")
+    check("source_method" not in det["0"] and "source_method" not in det["1"], "新偵測的點不另寫 source_method")
+    check("reused_previous" in raw["method"], f"校正檔 method 看得出是沿用（{raw['method']}）")
     check("aruco+click" not in raw["method"], f"校正檔 method 不是 aruco+click（{raw['method']}）")
-    check("reused_previous" not in raw["method"], "有逐點紀錄時，不把遠端改標成 reused_previous")
     got = np.asarray(raw["image_points_px"], float)
     check(np.allclose(got[2], [12.0, 34.0]) and np.allclose(got[3], [56.0, 78.0]), "沿用的是前一支的座標")
+    old = legacy_raw["marker_detection"]
+    check(old["2"]["method"] == "reused_previous" and old["2"]["source_method"] is None,
+          "舊檔沒有逐點紀錄時，source_method 是 null")
+    check(old["3"]["source_method"] is None, "另一個沿用點的 source_method 也是 null")
 
 
 def main():
