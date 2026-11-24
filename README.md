@@ -13,7 +13,7 @@
 3. 雙擊「一鍵分析.command」→ 選 `S02` 資料夾 → 等它跑完。若跳出視窗要你點標記，依序點畫面上提示的標記，按 Enter。
 4. 報告會自動打開；把 `S02/寄給研究者_S02.zip` 寄給研究者（不含影片，只有幾 MB）。
 
-**更新程式**：程式放在 GitHub（robotdevatseng/gaitlab），鎖版是 tag **v0.4.1**。最簡單：到 https://github.com/robotdevatseng/gaitlab 按綠色的 Code → Download ZIP，解壓縮後取代舊的 gaitlab 資料夾（受試者資料夾請放在 gaitlab 外面）。若用 git clone 下來，雙擊「更新程式.command」（Windows：更新程式.bat）會抓取 tags 並切換到 `v0.4.1`，不再跟著 main 前進。你改過的 `設定.txt` 會留下來，不會被蓋掉。更新後不必重跑舊資料，除非研究者要求；要重跑時姿態檔已有快取，一位受試者只要幾十秒。
+**更新程式**：程式放在 GitHub（robotdevatseng/gaitlab），鎖版是 tag **v0.4.2**。最簡單：到 https://github.com/robotdevatseng/gaitlab 按綠色的 Code → Download ZIP，解壓縮後取代舊的 gaitlab 資料夾（受試者資料夾請放在 gaitlab 外面）。若用 git clone 下來，雙擊「更新程式.command」（Windows：更新程式.bat）會抓取 tags 並切換到 `v0.4.2`，不再跟著 main 前進。你改過的 `設定.txt` 會留下來，不會被蓋掉。更新後不必重跑舊資料，除非研究者要求；要重跑時姿態檔已有快取，一位受試者只要幾十秒。
 
 **影片存放與重跑流程（Google Drive「步態研究_原始影片」）**
 
@@ -64,10 +64,10 @@
 需要 **Python 3.10、3.11 或 3.12**（建議 3.11）。Windows 和 Mac（含 M 系列晶片）都可以。
 
 ```bash
-# 1) 下載並切到鎖版 v0.4.1（分析程式停在這個 tag，不跟 main 前進）
+# 1) 下載並切到鎖版 v0.4.2（分析程式停在這個 tag，不跟 main 前進）
 git clone https://github.com/robotdevatseng/gaitlab.git
 cd gaitlab
-git checkout v0.4.1
+git checkout v0.4.2
 
 # 2) 建立獨立環境（建議）
 python -m venv .venv
@@ -85,7 +85,7 @@ python tests/check_install.py
 
 看到「檢查通過 ✔」就完成了。
 
-`設定.txt` 不在版控裡。第一次執行一鍵分析時，若資料夾裡還沒有 `設定.txt`，程式會從 `設定.範例.txt` 複製一份。之後只改 `設定.txt`。雙擊「更新程式」切換到 `v0.4.1` 時，也不會用版控裡的設定蓋過你改過的內容。
+`設定.txt` 不在版控裡。第一次執行一鍵分析時，若資料夾裡還沒有 `設定.txt`，程式會從 `設定.範例.txt` 複製一份。之後只改 `設定.txt`。雙擊「更新程式」切換到 `v0.4.2` 時，也不會用版控裡的設定蓋過你改過的內容。
 
 ---
 

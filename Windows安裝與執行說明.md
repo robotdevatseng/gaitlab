@@ -19,7 +19,7 @@ Mac 是主要版本；Windows 可以用，但**尚未在 Windows 實機上完整
 ## 更新程式
 
 - 用 ZIP 下載的：重新 Download ZIP，解壓縮後取代舊資料夾（`.venv` 資料夾留著就不用重新安裝）。
-- 用 git 或 GitHub Desktop 下載的：雙擊 `更新程式.bat`（抓取 tags 後切換到鎖版 `v0.4.1`，不再 `git pull` main）。你改過的 `設定.txt` 會保留。
+- 用 git 或 GitHub Desktop 下載的：雙擊 `更新程式.bat`（抓取 tags 後切換到鎖版 `v0.4.2`，不再 `git pull` main）。你改過的 `設定.txt` 會保留。
 
 ## Windows 上要注意的地方
 

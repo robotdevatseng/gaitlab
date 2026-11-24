@@ -46,8 +46,9 @@ def _marker(i, side=80):
 
 
 def test_version_constant():
-    print("版本號 0.4.1")
-    check(V.PROGRAM_VERSION == "0.4.1", f"PROGRAM_VERSION 是 0.4.1（實際 {V.PROGRAM_VERSION}）")
+    print("版本號 0.4.2")
+    check(V.PROGRAM_VERSION == "0.4.2", f"PROGRAM_VERSION 是 0.4.2（實際 {V.PROGRAM_VERSION}）")
+    check("0.4.2" in V.version_line(V.get_version()), "報告用的版本行取自 PROGRAM_VERSION")
     check(V.version_line({}) == "程式版本 未取得　|　git commit 未取得", "沒有版本資訊時寫「未取得」")
 
 
@@ -315,7 +316,7 @@ def main():
     test_near_center_is_median()
     test_far_search_scans_whole_window()
     test_recalc_keeps_point_methods()
-    print("0.4.1 自我檢查通過 ✔")
+    print("0.4.2 自我檢查通過 ✔")
 
 
 if __name__ == "__main__":
