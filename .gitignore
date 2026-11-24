@@ -29,6 +29,8 @@ GaitLab_最終資料*/
 *.tif
 *.tiff
 *.pdf
+# 本機設定。由 設定.範例.txt 複製而來，不進版控，更新時也不覆蓋
+設定.txt
 # Python / 環境
 __pycache__/
 *.py[cod]
