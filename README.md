@@ -265,13 +265,14 @@ python -m gaitlab static S01_static.mov --calib P001_result/calib.json --cam-hei
 
 第 2、3 項會讓校正點的像素座標和 0.4.0 差在次像素到數像素，步寬、步長可能跟著變。請用真實影片在本機複驗後再鎖版。自我檢查（合成畫面，不含受試者影片）：`python tests/test_v041.py`，並重跑 `python tests/test_far_marker_roi.py`、`python tests/test_workorder_v3.py`、`python tests/check_install.py`。
 
-repo 以外的獨立工具 `recalc_after_relabel.py` 寫出的校正檔 `method` 欄不可信。正式點位以這個程式庫寫出的校正檔為準。
+repo 以外的獨立工具 `recalc_after_relabel.py` 在某些情況會把 `method` 欄寫死，所以該工具輸出的 `method` 欄不可信；它的點位與 homography 是正確的。正式校正檔以研究線歸檔為準。
 
 **已知限制（本版不改）**
 
-- 遠端標記（ID 2、3）若在全畫面就偵測到，中心仍取第一次看到的位置，不取多格中位數。
-- 相對多格中位數，這個位置可能差 1–2 px。
-- 本版不修改這個行為。
+- 遠端標記（ID 2、3）在全畫面偵測到時，取第一次看到的位置。
+- 和全畫面多格中位數比，約差 0.2–0.8 px。
+- 和放大偵測的中位數比，約差 1.1–1.3 px，最壞單格 1.8 px（IMG_1554 實測）。
+- 本版不改這個行為。
 
 **驗證狀態總表（2026-11-13，12/10 交接前不借壓力步道）**
 
